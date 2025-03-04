@@ -1,8 +1,8 @@
 use core::{future::poll_fn, marker::PhantomData, task::Poll};
 
 use rtic_monotonics::{fugit::Duration, Monotonic};
-use rtic_monotonics::systick::prelude::*;
 use smoltcp::iface::SocketHandle;
+use smoltcp::socket::tcp::State;
 
 use crate::{net_channel::NetChannel, Mono};
 
@@ -144,16 +144,34 @@ impl picoserve::io::Socket for Socket {
         _timeouts: &picoserve::Timeouts<Timer::Duration>,
         _timer: &mut Timer,
     ) -> Result<(), picoserve::Error<Self::Error>> {
-        // drop(self);
         let &Self(handle, channel) = &self;
 
-        channel.with(|_iface, sockets| {
-            let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
-            socket.close(); // maybe `close` and wait? (in `async fn shutdown`)
-        });
+        poll_fn(|cx| {
+            channel.with(|_iface, sockets| {
+                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
 
-        crate::app::poll_network::spawn().ok();
-        Mono::delay(1000.millis()).await;
+                loop {
+                    match socket.state() {
+                        State::TimeWait | State::Closed => break Poll::Ready(()),
+                        State::FinWait1 | State::FinWait2 | State::Closing | State::LastAck => {
+                            socket.register_send_waker(cx.waker());
+                            break Poll::Pending;
+                        }
+                        State::CloseWait
+                        | State::Established
+                        | State::SynReceived
+                        | State::SynSent
+                        | State::Listen => {
+                            socket.close();
+                            socket.register_send_waker(cx.waker());
+                            crate::app::poll_network::spawn().ok();
+                            return Poll::Pending;
+                        }
+                    }
+                }
+            })
+        })
+        .await;
 
         Ok(())
     }

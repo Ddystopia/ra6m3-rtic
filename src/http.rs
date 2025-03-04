@@ -95,7 +95,7 @@ async fn handle_connection(app: &picoserve::Router<AppRouter, AppState>, socket:
     let mut buf = [0; 1024];
 
     match picoserve::serve_with_state(app, Timer, &config, &mut buf, socket, &()).await {
-        Ok(count) => defmt::debug!("Handled {} requests", count),
+        Ok(count) => defmt::trace!("Handled {} requests", count),
         Err(picoserve::Error::Read(e)) => defmt::error!("Failed to serve with Read Error: {}", e),
         Err(picoserve::Error::Write(e)) => defmt::error!("Failed to serve with Write Error: {}", e),
         Err(picoserve::Error::ReadTimeout) => defmt::error!("Failed to serve with Read Timeout"),
