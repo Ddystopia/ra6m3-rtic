@@ -62,8 +62,13 @@ impl picoserve::io::Read for Read<'_> {
                 let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(self.0);
 
                 if !socket.can_recv() {
-                    socket.register_recv_waker(cx.waker());
-                    return Poll::Pending;
+                    // todo: if *will* become `may_recv`, return `Pending` too
+                    return if socket.may_recv() {
+                        socket.register_recv_waker(cx.waker());
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Ok(0))
+                    };
                 }
 
                 while socket.can_recv() {
@@ -73,10 +78,6 @@ impl picoserve::io::Read for Read<'_> {
                         read += len;
                         (len, ())
                     })?;
-                }
-
-                if read == 0 {
-                    // todo: assert socket is closed
                 }
 
                 Poll::Ready(Ok(read))
@@ -99,8 +100,13 @@ impl picoserve::io::Write for Write<'_> {
                 let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(self.0);
 
                 if !socket.can_send() {
-                    socket.register_send_waker(cx.waker());
-                    return Poll::Pending;
+                    // todo: if *will* become `may_send`, return `Pending` too
+                    return if socket.may_send() {
+                        socket.register_send_waker(cx.waker());
+                        Poll::Pending
+                    } else {
+                        Poll::Ready(Ok(0))
+                    };
                 }
 
                 while socket.can_send() && written < buf.len() {
@@ -110,10 +116,6 @@ impl picoserve::io::Write for Write<'_> {
                         written += len;
                         (len, ())
                     })?
-                }
-
-                if written == 0 {
-                    // assert socket is closed
                 }
 
                 crate::app::poll_network::spawn().ok();
