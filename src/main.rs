@@ -216,7 +216,7 @@ mod app {
         defmt::info!("Network initialized");
 
         waiter::spawn().ok();
-        // mqtt::spawn().ok();
+        mqtt::spawn().ok();
         http::spawn().ok();
 
         defmt::info!("Init done");

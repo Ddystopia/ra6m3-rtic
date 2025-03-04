@@ -286,14 +286,12 @@ impl TcpClientStack for EmbeddedNalAdapter {
         remote: core::net::SocketAddr,
     ) -> embedded_nal::nb::Result<(), Self::Error> {
         let now = Mono::now();
-        defmt::info!("Connecting poll: got {}", now.ticks());
+        defmt::trace!("Connecting poll: got {}", now.ticks());
 
         let mut should_try_connect = true;
         if let Some(last) = self.last_connection {
             if let Some(diff) = now.checked_duration_since(last) {
                 if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
-                    let to = last + RECONNECT_INTERVAL_MS.millis::<1, 1000>();
-                    defmt::info!("Connecting poll: request {}", to.ticks());
                     should_try_connect = false;
 
                     // This is not async function and is not pinned, so let the
@@ -311,7 +309,6 @@ impl TcpClientStack for EmbeddedNalAdapter {
             // note: this is in SynSent state for several seconds sometimes
             if !socket.is_open() && should_try_connect {
                 last_connection = Some(now);
-                defmt::info!("Connecting");
                 socket.connect(iface.context(), remote, port).expect(
                     "Inspection of error conditions, they will only happen during development",
                 );
@@ -324,7 +321,6 @@ impl TcpClientStack for EmbeddedNalAdapter {
             if socket.state() == smoltcp::socket::tcp::State::Established {
                 Ok(())
             } else {
-                defmt::info!("TCP socket connect state: {}", socket.state());
                 Err(embedded_nal::nb::Error::<Self::Error>::WouldBlock)
             }
         });
