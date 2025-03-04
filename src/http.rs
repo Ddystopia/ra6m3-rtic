@@ -82,9 +82,7 @@ pub async fn http(mut ctx: crate::app::http::Context<'_>) -> Infallible {
                      http,
                      ..
                  }| {
-                    let poll = http.channel.feed(iface, sockets, |_| fut.as_mut().poll(cx));
-                    crate::app::poll_network::spawn().ok();
-                    poll
+                    http.channel.feed(iface, sockets, |_| fut.as_mut().poll(cx))
                 },
             )
         })
