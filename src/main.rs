@@ -292,7 +292,7 @@ mod app {
             };
         }
 
-        let poll_at = (net, dev).lock(|mut net, device| {
+        let poll_at = net.lock(|mut net| {
             let Net { sockets, iface, .. } = &mut net;
 
             iface.poll_at(smol_now(), sockets)
