@@ -1,6 +1,7 @@
 use core::{future::poll_fn, marker::PhantomData, task::Poll};
 
 use rtic_monotonics::{fugit::Duration, Monotonic};
+use rtic_monotonics::systick::prelude::*;
 use smoltcp::iface::SocketHandle;
 
 use crate::{net_channel::NetChannel, Mono};
@@ -102,7 +103,7 @@ impl picoserve::io::Write for Write<'_> {
                     return Poll::Pending;
                 }
 
-                while socket.can_send() {
+                while socket.can_send() && written < buf.len() {
                     socket.send(|data| {
                         let len = data.len().min(buf[written..].len());
                         data[..len].copy_from_slice(&buf[written..][..len]);
@@ -143,7 +144,16 @@ impl picoserve::io::Socket for Socket {
         _timeouts: &picoserve::Timeouts<Timer::Duration>,
         _timer: &mut Timer,
     ) -> Result<(), picoserve::Error<Self::Error>> {
-        drop(self);
+        // drop(self);
+        let &Self(handle, channel) = &self;
+
+        channel.with(|_iface, sockets| {
+            let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+            socket.close(); // maybe `close` and wait? (in `async fn shutdown`)
+        });
+
+        crate::app::poll_network::spawn().ok();
+        Mono::delay(1000.millis()).await;
 
         Ok(())
     }

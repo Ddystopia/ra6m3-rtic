@@ -111,23 +111,13 @@ async fn handle_connection(app: &picoserve::Router<AppRouter, AppState>, socket:
 }
 
 mod make_app {
-    use picoserve::{
-        response::{Response, StatusCode},
-        routing::get,
-    };
+    use picoserve::{response::File, routing::get_service};
 
     use super::AppState;
 
     pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
 
-    pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
-        picoserve::Router::new().route(
-            "/",
-            get(|| async {
-                Response::new(
-                    StatusCode::OK,
-                    r#"
-<!DOCTYPE html>
+    const HELLO_WORLD: &str = r#"<!DOCTYPE html>
 <html>
 <head>
     <title>Qemu Picoserve</title>
@@ -136,12 +126,11 @@ mod make_app {
 <body>
     <h1>Welcome to Qemu Picoserve</h1>
     <p>This is a placeholder page.</p>
-    <p>For more information, see the <a href="
 </body>
 </html>
-            "#,
-                )
-            }),
-        )
+"#;
+
+    pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
+        picoserve::Router::new().route("/", get_service(File::html(HELLO_WORLD)))
     }
 }

@@ -116,7 +116,11 @@ fn init_network(
 
     let mqtt_storage = &mut storage.mqtt;
     let http_storage = &mut storage.http;
-    let mqtt_socket_handle = sockets.iter().next().expect("Socket must be available").0;
+    let mut sockets_i = sockets.iter().map(|s| s.0);
+    let mqtt_socket_handle = sockets_i.next().expect("Socket must be available");
+    let http_socket_handle = sockets_i.next().expect("Socket must be available");
+    drop(sockets_i);
+
     let conf = minimq::ConfigBuilder::new(
         mqtt::Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
             MQTT_BROKER_IP,
@@ -131,7 +135,7 @@ fn init_network(
         conf,
     ));
     let http = http_storage.http.get_or_insert(Http::new(
-        mqtt_socket_handle, //
+        http_socket_handle, //
         &mut http_storage.channel,
     ));
 
@@ -212,7 +216,8 @@ mod app {
         defmt::info!("Network initialized");
 
         waiter::spawn().ok();
-        mqtt::spawn().ok();
+        // mqtt::spawn().ok();
+        http::spawn().ok();
 
         defmt::info!("Init done");
 
