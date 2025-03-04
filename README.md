@@ -18,6 +18,5 @@ You can configure other env variables in `.cargo/config.toml`.
 ## Todo
 
 - RA6M3 support
-- HTTP server
-- HTTPS server
+- TLS
 - Real time metrics
