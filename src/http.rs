@@ -11,7 +11,7 @@ use rtic::Mutex;
 use smoltcp::{iface::SocketHandle, socket::tcp};
 use socket::{Socket, Timer};
 
-use crate::{net_channel::NetChannel, Net};
+use crate::{net::HTTP_BUFFER_SIZE, net_channel::NetChannel, Net};
 
 mod socket;
 
@@ -24,7 +24,6 @@ pub struct Http {
 
 pub struct HttpStorage {
     pub channel: NetChannel,
-    // pub buffer: [u8; HTTP_BUFFER_SIZE],
     pub http: Option<Http>,
 }
 
@@ -92,7 +91,8 @@ async fn handle_connection(app: &picoserve::Router<AppRouter, AppState>, socket:
         write: None,
     });
 
-    let mut buf = [0; 1024];
+    // Priority is low so we are at the bottom of the stack.
+    let mut buf = [0; HTTP_BUFFER_SIZE];
 
     match picoserve::serve_with_state(app, Timer, &config, &mut buf, socket, &()).await {
         Ok(count) => defmt::trace!("Handled {} requests", count),

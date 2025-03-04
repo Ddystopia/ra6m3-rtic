@@ -14,6 +14,7 @@ const TCP_RX_SOCKET_BUFFER_SIZE: usize = 512;
 const TCP_TX_SOCKET_BUFFER_SIZE: usize = 512;
 
 pub const MQTT_BUFFER_SIZE: usize = 3 * 1024;
+pub const HTTP_BUFFER_SIZE: usize = 1024;
 
 pub struct NetStorage {
     pub sockets: [SocketStorage<'static>; NUM_SOCKETS],
