@@ -1,0 +1,85 @@
+version: '3'
+
+vars:
+  # TARGET: thumbv7em-none-eabihf
+  TARGET: thumbv7em-none-eabi
+  MAC: "fe:e3:a9:97:ad:ab"
+  CC: "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
+
+tasks:
+  build:
+    deps: [build-debug, build-release]
+
+  doc:
+    cmds:
+      - cargo doc --target {{.TARGET}}
+
+  build-debug:
+    env:
+      CC: "{{.CC}}"
+    cmds:
+      - cargo build --target {{.TARGET}}
+
+  build-release:
+    env:
+      CC: "{{.CC}}"
+    cmds:
+      - cargo build --release --target {{.TARGET}}
+
+  setup-tap:
+    internal: true
+    silent: true
+    cmds:
+      - |
+          ip link show tap0 > /dev/null && exit 0 || true;
+           sudo ip tuntap add tap0 mode tap user $USER ;
+           sudo ip addr flush dev tap0 ;
+           sudo ip link set tap0 up ;
+           sudo ip addr add 192.168.69.100/24 dev tap0 ; # qemu device
+           sudo ip addr add 192.168.69.20/24 dev tap0 ; # mqtt broker
+           sudo ip -6 addr add fe80::100/64 dev tap0 ;
+           sudo ip -6 addr add fdaa::100/64 dev tap0 ;
+           sudo ip -6 route add fe80::/64 dev tap0 || true; # RTNETLINK answers: File exists -- idk what is it
+           sudo ip -6 route add fdaa::/64 dev tap0 ;
+
+
+  remove-tap:
+    cmds:
+      - sudo ip tuntap del tap0 mode tap
+
+  run-debug-qemu:
+    deps: [build-debug]
+    cmds:
+      - task: run-qemu
+        vars: { PROFILE: 'debug' }
+
+  run-release-qemu:
+    deps: [build-release]
+    cmds:
+      - task: run-qemu
+        vars: { PROFILE: 'release' }
+
+  run-qemu:
+    internal: true
+    deps: [build-debug]
+    vars:
+      PROFILE: '{{ default "-" .PROFILE }}'
+    cmds:
+      - task: setup-tap
+      - cmd: if [ "{{.PROFILE}}" == "-" ]; then echo "PROFILE is not set"; exit 1; fi
+        silent: true
+      - qemu-system-arm
+        -cpu cortex-m3
+        -machine lm3s6965evb
+        -display none
+        -nographic
+        -serial mon:stdio
+        -net nic,macaddr=$MAC
+        -net tap,ifname=tap0,script=no,downscript=no
+        -semihosting-config enable=on,target=native
+        -kernel target/{{.TARGET}}/{{.PROFILE}}/project
+        | defmt-print -v -e target/{{.TARGET}}/{{.PROFILE}}/project
+        # -S -s
+      # - task: remove-tap
+
+

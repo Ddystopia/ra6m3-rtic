@@ -1,0 +1,28 @@
+[build]
+# target = "thumbv7em-none-eabihf"
+target = "thumbv7em-none-eabi"
+
+[target.thumbv7em-none-eabihf]
+rustflags = [
+  "-C", "target-cpu=cortex-m4",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[target.thumbv7em-none-eabi]
+rustflags = [
+  "-C", "target-cpu=cortex-m3",
+  "-C", "link-arg=-Tlink.x",
+  "-C", "link-arg=-Tdefmt.x",
+]
+
+[env]
+DEFMT_LOG = "debug"
+MAC = "fe:e3:a9:97:ad:ab"
+IP_V4 = "192.168.69.1/24"
+IP_V4_GATEWAY = "192.168.69.100"
+IP_V6 = "fdaa:0000:0000:0000:0000:0000:0000:0001/64"
+IP_V6_GATEWAY = "fdaa:0000:0000:0000:0000:0000:0000:100"
+MQTT_CLIENT_ID = "rtic"
+MQTT_BROKER_IP = "192.168.69.20"
+MQTT_BROKER_PORT = "1883"
