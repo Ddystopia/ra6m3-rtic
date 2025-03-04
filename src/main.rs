@@ -2,6 +2,7 @@
 #![no_std]
 #![feature(cell_update)]
 #![feature(exclusive_wrapper)]
+#![feature(type_alias_impl_trait)]
 
 /**
 
@@ -20,8 +21,10 @@ mod defmt_semihosting;
 mod net_device;
 
 mod conf;
+mod http;
 mod mqtt;
 mod net;
+mod net_channel;
 #[cfg(feature = "ra6m3")]
 mod net_device;
 mod util;
@@ -31,6 +34,7 @@ use conf::{
     CLOCK_HZ, IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC,
     MQTT_BROKER_IP, MQTT_BROKER_PORT, SYS_TICK_HZ,
 };
+use http::Http;
 use mqtt::Mqtt;
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
@@ -56,6 +60,7 @@ pub struct Net {
     iface: Interface,
     sockets: SocketSet<'static>,
     mqtt: &'static mut Mqtt,
+    http: &'static mut Http,
 }
 
 fn smol_now() -> Instant {
@@ -110,6 +115,7 @@ fn init_network(
         .unwrap();
 
     let mqtt_storage = &mut storage.mqtt;
+    let http_storage = &mut storage.http;
     let mqtt_socket_handle = sockets.iter().next().expect("Socket must be available").0;
     let conf = minimq::ConfigBuilder::new(
         mqtt::Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
@@ -120,9 +126,13 @@ fn init_network(
     );
     let conf = conf.keepalive_interval(30_000);
     let mqtt = mqtt_storage.mqtt.get_or_insert(Mqtt::new(
-        &mut mqtt_storage.channel,
         mqtt_socket_handle,
+        &mut mqtt_storage.channel,
         conf,
+    ));
+    let http = http_storage.http.get_or_insert(Http::new(
+        mqtt_socket_handle, //
+        &mut http_storage.channel,
     ));
 
     (
@@ -130,6 +140,7 @@ fn init_network(
             iface,
             sockets,
             mqtt,
+            http,
         },
         device,
     )
@@ -169,6 +180,7 @@ mod app {
     #[shared]
     struct Shared {
         net: Net,
+        // maybe move to `Local`.
         device: net_device::Dev,
     }
 
@@ -231,6 +243,11 @@ mod app {
     #[task(priority = 1, shared = [net])]
     async fn mqtt(ctx: mqtt::Context) {
         match crate::mqtt::mqtt(ctx).await {};
+    }
+
+    #[task(priority = 1, shared = [net])]
+    async fn http(ctx: http::Context) {
+        match crate::http::http(ctx).await {};
     }
 
     #[task(binds = ETHERNET, priority = 1, shared = [device])]

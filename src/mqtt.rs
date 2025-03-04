@@ -1,6 +1,6 @@
 use core::{convert::Infallible, net::SocketAddr, task::Poll};
 
-use channel::{FedMqttToken, MqttNetChannel};
+use crate::net_channel::{FedToken, NetChannel};
 use embedded_nal::{TcpClientStack, TcpError};
 use minimq::{ConfigBuilder, Publication};
 use rtic::Mutex;
@@ -13,15 +13,13 @@ use smoltcp::{
 use crate::fugit::Instant;
 use crate::{conf::CLOCK_HZ, net::MQTT_BUFFER_SIZE, Mono, Net};
 
-mod channel;
-
 const MQTT_CLIENT_PORT: u16 = 58766;
 const RECONNECT_INTERVAL_MS: u32 = 1_000;
 
 pub struct Mqtt {
     pub socket: SocketHandle,
     minimq: Option<minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>>,
-    channel: &'static MqttNetChannel,
+    channel: &'static NetChannel,
     conf: Option<ConfigBuilder<'static, Broker>>,
 }
 
@@ -30,7 +28,7 @@ pub struct Broker(pub SocketAddr);
 pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
 
 pub struct MqttStorage {
-    pub channel: MqttNetChannel,
+    pub channel: NetChannel,
     pub buffer: [u8; MQTT_BUFFER_SIZE],
     pub mqtt: Option<Mqtt>,
 }
@@ -39,7 +37,7 @@ pub struct EmbeddedNalAdapter {
     last_connection: Option<Instant<u32, 1, 1000>>,
     port_shift: core::num::Wrapping<u8>,
     socket: Option<SocketHandle>,
-    net: &'static MqttNetChannel,
+    net: &'static NetChannel,
 }
 
 #[derive(PartialEq, Debug)]
@@ -74,7 +72,7 @@ impl minimq::Broker for Broker {
 impl MqttStorage {
     pub const fn new() -> Self {
         Self {
-            channel: MqttNetChannel::new(),
+            channel: NetChannel::new(),
             mqtt: None,
             buffer: [0; MQTT_BUFFER_SIZE],
         }
@@ -83,8 +81,8 @@ impl MqttStorage {
 
 impl Mqtt {
     pub fn new(
-        channel: &'static mut MqttNetChannel,
         socket: SocketHandle,
+        channel: &'static mut NetChannel,
         conf: ConfigBuilder<'static, Broker>,
     ) -> Self {
         Self {
@@ -97,7 +95,7 @@ impl Mqtt {
 
     fn minimq(
         &mut self,
-        _: FedMqttToken,
+        _: FedToken,
     ) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
             let adapter = EmbeddedNalAdapter::new(self.channel, self.socket);
@@ -146,7 +144,7 @@ pub async fn mqtt(mut ctx: crate::app::mqtt::Context<'_>) -> Infallible {
         F: FnMut(&mut MqttClient) -> Result<R, MError> + Copy,
     {
         core::future::poll_fn(|_| {
-            ctx.shared.net.lock(|Net { sockets, iface, mqtt }| {
+            ctx.shared.net.lock(|Net { sockets, iface, mqtt, .. }| {
                 mqtt.poll(iface, sockets); // ingress
                 match mqtt.with_client(iface, sockets, f) {
                     Err(minimq::Error::NotReady) => {
@@ -241,7 +239,7 @@ mod waiter {
 }
 
 impl EmbeddedNalAdapter {
-    pub const fn new(net: &'static MqttNetChannel, handle: SocketHandle) -> Self {
+    pub const fn new(net: &'static NetChannel, handle: SocketHandle) -> Self {
         Self {
             last_connection: None,
             port_shift: core::num::Wrapping(0),
