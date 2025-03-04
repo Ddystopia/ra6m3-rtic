@@ -280,15 +280,20 @@ mod app {
     async fn poll_network(mut ctx: poll_network::Context) {
         let net = &mut ctx.shared.net;
         let dev = &mut ctx.shared.device;
+
+        loop {
+            match (net, dev).lock(|mut net, device| {
+                let Net { sockets, iface, .. } = &mut net;
+
+                net.iface.poll(smol_now(), device, &mut net.sockets)
+            }) {
+                smoltcp::iface::PollResult::None => break,
+                smoltcp::iface::PollResult::SocketStateChanged => continue,
+            };
+        }
+
         let poll_at = (net, dev).lock(|mut net, device| {
             let Net { sockets, iface, .. } = &mut net;
-
-            loop {
-                match iface.poll(smol_now(), device, sockets) {
-                    smoltcp::iface::PollResult::None => break,
-                    smoltcp::iface::PollResult::SocketStateChanged => continue,
-                }
-            }
 
             iface.poll_at(smol_now(), sockets)
         });
