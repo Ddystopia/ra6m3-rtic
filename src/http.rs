@@ -47,16 +47,11 @@ pub async fn http(mut ctx: crate::app::http::Context<'_>) -> Infallible {
     let app = make_app::make_app();
 
     loop {
-        poll_fn(|cx| {
-            ctx.shared.net.lock(|Net { sockets, http, .. }| {
-                let socket = sockets.get_mut::<tcp::Socket>(http.socket);
-                socket.listen(80).unwrap();
-                socket.register_recv_waker(cx.waker());
-                crate::app::poll_network::spawn().ok();
-                Poll::Ready(())
-            })
-        })
-        .await;
+        ctx.shared.net.lock(|Net { sockets, http, .. }| {
+            let socket = sockets.get_mut::<tcp::Socket>(http.socket);
+            socket.listen(80).unwrap();
+            crate::app::poll_network::spawn().ok();
+        });
 
         let socket = poll_fn(|cx| {
             ctx.shared.net.lock(|Net { sockets, http, .. }| {
