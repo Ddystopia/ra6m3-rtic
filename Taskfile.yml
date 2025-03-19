@@ -26,6 +26,10 @@ tasks:
     cmds:
       - cargo build --release --target {{.TARGET}}
 
+  start-mqtt:
+    cmds:
+      - rumqttd -c rumqttd.toml --quiet
+
   setup-tap:
     internal: true
     silent: true
