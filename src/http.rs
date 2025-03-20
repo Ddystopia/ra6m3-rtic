@@ -2,6 +2,7 @@ use core::{future::poll_fn, task::Poll};
 
 use make_app::AppRouter;
 use picoserve::Config;
+use rtic_monotonics::fugit::ExtU32;
 use smoltcp::{iface::SocketHandle, socket::tcp};
 use socket::{Socket, Timer};
 
@@ -14,12 +15,13 @@ pub use crate::app::http_type_inference::NetLock;
 
 pub struct Storage {
     pub buf: [u8; HTTP_BUFFER_SIZE],
+    pub app: Option<picoserve::Router<AppRouter, AppState>>,
 }
 
 impl Storage {
     pub const fn new() -> Self {
         let buf = [0; HTTP_BUFFER_SIZE];
-        Self { buf }
+        Self { buf, app: None }
     }
 }
 
@@ -28,7 +30,7 @@ pub async fn http(
     socket_handle: SocketHandle,
     storage: &'static mut Storage,
 ) -> ! {
-    let app = make_app::make_app();
+    let app = storage.app.get_or_insert(make_app::make_app());
 
     loop {
         net.lock(|net| {
@@ -61,9 +63,9 @@ async fn handle_connection(
     buf: &mut [u8],
 ) {
     let config = Config::new(picoserve::Timeouts {
-        start_read_request: None,
-        read_request: None,
-        write: None,
+        start_read_request: Some(5000.millis()),
+        read_request: Some(1000.millis()),
+        write: Some(5000.millis()),
     });
 
     match picoserve::serve_with_state(app, Timer, &config, buf, socket, &()).await {

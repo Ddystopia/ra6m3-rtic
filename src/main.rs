@@ -133,7 +133,7 @@ fn exit() -> ! {
 #[rtic::app(
   device = lm3s6965,
   // device = ra6m3,
-  dispatchers = [GPIOA, GPIOB, GPIOC, GPIOD, GPIOE],
+  dispatchers = [GPIOA, GPIOB /*, GPIOC, GPIOD, GPIOE */],
   peripherals = true
 )]
 mod app {
@@ -294,6 +294,8 @@ mod app {
         }
     }
 
+    /// This task is responsible for delayed polling of the network stack.
+    /// It is used solely by `poll_network` to shcedule itself for `poll_at`.
     #[task(priority = 1)]
     async fn network_poll_waiter(
         _ctx: network_poll_waiter::Context,
