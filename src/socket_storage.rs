@@ -1,6 +1,4 @@
-use smoltcp::{iface::SocketStorage, socket::udp};
-
-use crate::{http::HttpStorage, mqtt::MqttStorage};
+use smoltcp::{iface, socket::udp};
 
 const NUM_TCP_SOCKETS: usize = 3 /* http */ + 1 /* mqtt */;
 const NUM_UDP_SOCKETS: usize = 0;
@@ -16,10 +14,8 @@ const TCP_TX_SOCKET_BUFFER_SIZE: usize = 512;
 pub const MQTT_BUFFER_SIZE: usize = 3 * 1024;
 pub const HTTP_BUFFER_SIZE: usize = 1024;
 
-pub struct NetStorage {
-    pub sockets: [SocketStorage<'static>; NUM_SOCKETS],
-    pub mqtt: MqttStorage,
-    pub http: HttpStorage,
+pub struct SocketStorage {
+    pub sockets: [iface::SocketStorage<'static>; NUM_SOCKETS],
     pub tcp_sockets: [TcpSocketStorage; NUM_TCP_SOCKETS],
     pub udp_sockets: [UdpSocketStorage; NUM_UDP_SOCKETS],
 }
@@ -36,12 +32,10 @@ pub struct TcpSocketStorage {
     pub tx_payload: [u8; TCP_TX_SOCKET_BUFFER_SIZE],
 }
 
-impl NetStorage {
+impl SocketStorage {
     pub const fn new() -> Self {
         Self {
-            mqtt: MqttStorage::new(),
-            http: HttpStorage::new(),
-            sockets: [SocketStorage::EMPTY; NUM_SOCKETS],
+            sockets: [iface::SocketStorage::EMPTY; NUM_SOCKETS],
             tcp_sockets: [const { TcpSocketStorage::new() }; NUM_TCP_SOCKETS],
             udp_sockets: [const { UdpSocketStorage::new() }; NUM_UDP_SOCKETS],
         }

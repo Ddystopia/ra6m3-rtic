@@ -1,63 +1,48 @@
-use core::{
-    convert::Infallible,
-    future::{poll_fn, Future},
-    pin::pin,
-    task::Poll,
-};
+use core::{future::poll_fn, task::Poll};
 
 use make_app::AppRouter;
 use picoserve::Config;
-use rtic::Mutex;
 use smoltcp::{iface::SocketHandle, socket::tcp};
 use socket::{Socket, Timer};
 
-use crate::{net::HTTP_BUFFER_SIZE, net_channel::NetChannel, Net};
+use crate::{poll_share::TokenProvider, socket_storage::HTTP_BUFFER_SIZE};
 
 mod socket;
 
 pub type AppState = ();
+pub use crate::app::http_type_inference::NetLock;
 
-pub struct Http {
-    socket: SocketHandle,
-    channel: &'static NetChannel,
+pub struct Storage {
+    pub buf: [u8; HTTP_BUFFER_SIZE],
 }
 
-pub struct HttpStorage {
-    pub channel: NetChannel,
-    pub http: Option<Http>,
-}
-
-impl HttpStorage {
+impl Storage {
     pub const fn new() -> Self {
-        Self {
-            channel: NetChannel::new(),
-            http: None,
-        }
+        let buf = [0; HTTP_BUFFER_SIZE];
+        Self { buf }
     }
 }
 
-impl Http {
-    pub fn new(socket: SocketHandle, channel: &'static NetChannel) -> Self {
-        Self { socket, channel }
-    }
-}
-
-pub async fn http(mut ctx: crate::app::http::Context<'_>) -> Infallible {
+pub async fn http(
+    net: TokenProvider<NetLock>,
+    socket_handle: SocketHandle,
+    storage: &'static mut Storage,
+) -> ! {
     let app = make_app::make_app();
 
     loop {
-        ctx.shared.net.lock(|Net { sockets, http, .. }| {
-            let socket = sockets.get_mut::<tcp::Socket>(http.socket);
+        net.lock(|net| {
+            let socket = net.sockets.get_mut::<tcp::Socket>(socket_handle);
             socket.listen(80).unwrap();
             crate::app::poll_network::spawn().ok();
         });
 
         let socket = poll_fn(|cx| {
-            ctx.shared.net.lock(|Net { sockets, http, .. }| {
-                let socket = sockets.get_mut::<tcp::Socket>(http.socket);
+            net.lock(|locked| {
+                let socket = locked.sockets.get_mut::<tcp::Socket>(socket_handle);
 
                 if socket.can_recv() {
-                    Poll::Ready(Socket::new(http.socket, http.channel))
+                    Poll::Ready(Socket::new(socket_handle, net))
                 } else {
                     socket.register_recv_waker(cx.waker());
                     Poll::Pending
@@ -66,35 +51,22 @@ pub async fn http(mut ctx: crate::app::http::Context<'_>) -> Infallible {
         })
         .await;
 
-        let mut fut = pin!(handle_connection(&app, socket));
-
-        poll_fn(|cx| {
-            ctx.shared.net.lock(
-                |Net {
-                     iface,
-                     sockets,
-                     http,
-                     ..
-                 }| {
-                    http.channel.feed(iface, sockets, |_| fut.as_mut().poll(cx))
-                },
-            )
-        })
-        .await
+        handle_connection(&app, socket, &mut storage.buf).await
     }
 }
 
-async fn handle_connection(app: &picoserve::Router<AppRouter, AppState>, socket: Socket) {
+async fn handle_connection(
+    app: &picoserve::Router<AppRouter, AppState>,
+    socket: Socket<NetLock>,
+    buf: &mut [u8],
+) {
     let config = Config::new(picoserve::Timeouts {
         start_read_request: None,
         read_request: None,
         write: None,
     });
 
-    // Priority is low so we are at the bottom of the stack.
-    let mut buf = [0; HTTP_BUFFER_SIZE];
-
-    match picoserve::serve_with_state(app, Timer, &config, &mut buf, socket, &()).await {
+    match picoserve::serve_with_state(app, Timer, &config, buf, socket, &()).await {
         Ok(count) => defmt::trace!("Handled {} requests", count),
         Err(picoserve::Error::Read(e)) => defmt::error!("Failed to serve with Read Error: {}", e),
         Err(picoserve::Error::Write(e)) => defmt::error!("Failed to serve with Write Error: {}", e),

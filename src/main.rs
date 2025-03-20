@@ -1,6 +1,6 @@
 #![no_main]
 #![no_std]
-#![feature(cell_update)]
+#![feature(never_type)]
 #![feature(exclusive_wrapper)]
 #![feature(type_alias_impl_trait)]
 
@@ -23,28 +23,26 @@ mod net_device;
 mod conf;
 mod http;
 mod mqtt;
-mod net;
-mod net_channel;
 #[cfg(feature = "ra6m3")]
 mod net_device;
+mod poll_share;
+mod socket_storage;
 mod util;
 
 use bare_metal::CriticalSection;
 use conf::{
     CLOCK_HZ, IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC,
-    MQTT_BROKER_IP, MQTT_BROKER_PORT, SYS_TICK_HZ,
+    SYS_TICK_HZ,
 };
-use http::Http;
-use mqtt::Mqtt;
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
-    iface::{Config, Interface, SocketSet},
+    iface::{Config, Interface, SocketHandle, SocketSet},
     socket::{tcp, udp},
     time::Instant,
     wire::{self, HardwareAddress, IpCidr},
 };
 
-use net::NetStorage;
+use socket_storage::SocketStorage;
 
 defmt::timestamp!("{=usize}", {
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -59,8 +57,6 @@ systick_monotonic!(Mono, CLOCK_HZ);
 pub struct Net {
     iface: Interface,
     sockets: SocketSet<'static>,
-    mqtt: &'static mut Mqtt,
-    http: &'static mut Http,
 }
 
 fn smol_now() -> Instant {
@@ -71,8 +67,8 @@ fn smol_now() -> Instant {
 fn init_network(
     #[cfg(feature = "ra6m3")] etherc0: ra6m3::ETHERC0,
     cs: CriticalSection<'_>,
-    storage: &'static mut NetStorage,
-) -> (Net, net_device::Dev) {
+    storage: &'static mut SocketStorage,
+) -> (Net, net_device::Dev, [SocketHandle; 2]) {
     defmt::info!("Starting device at {}", Mono::now().ticks());
 
     let mut device = net_device::Dev::new(
@@ -114,40 +110,14 @@ fn init_network(
         .add_default_ipv6_route(IP_V6_GATEWAY)
         .unwrap();
 
-    let mqtt_storage = &mut storage.mqtt;
-    let http_storage = &mut storage.http;
-    let mut sockets_i = sockets.iter().map(|s| s.0);
-    let mqtt_socket_handle = sockets_i.next().expect("Socket must be available");
-    let http_socket_handle = sockets_i.next().expect("Socket must be available");
-    drop(sockets_i);
+    let [mqtt, http] = {
+        let mut sockets_i = sockets.iter().map(|s| s.0);
+        let mqtt = sockets_i.next().expect("Socket must be available");
+        let http = sockets_i.next().expect("Socket must be available");
+        [mqtt, http]
+    };
 
-    let conf = minimq::ConfigBuilder::new(
-        mqtt::Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
-            MQTT_BROKER_IP,
-            MQTT_BROKER_PORT,
-        ))),
-        &mut mqtt_storage.buffer[..],
-    );
-    let conf = conf.keepalive_interval(30_000);
-    let mqtt = mqtt_storage.mqtt.get_or_insert(Mqtt::new(
-        mqtt_socket_handle,
-        &mut mqtt_storage.channel,
-        conf,
-    ));
-    let http = http_storage.http.get_or_insert(Http::new(
-        http_socket_handle, //
-        &mut http_storage.channel,
-    ));
-
-    (
-        Net {
-            iface,
-            sockets,
-            mqtt,
-            http,
-        },
-        device,
-    )
+    (Net { iface, sockets }, device, [mqtt, http])
 }
 
 fn exit() -> ! {
@@ -193,9 +163,7 @@ mod app {
         net_timeout_sender: Sender<'static, smoltcp::time::Instant, 1>,
     }
 
-    #[init(local = [
-        net_storage: NetStorage = NetStorage::new(),
-    ])]
+    #[init(local = [sockets: SocketStorage = SocketStorage::new()])]
     fn init(mut ctx: init::Context) -> (Shared, Local) {
         ctx.core.SCB.set_sleepdeep();
 
@@ -205,9 +173,10 @@ mod app {
         Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
 
         #[cfg(feature = "ra6m3")]
-        let (net, device) = init_network(ctx.device.ETHERC0, ctx.local.net_storage);
+        let (net, device, sockets) = init_network(ctx.device.ETHERC0, ctx.cs, ctx.local.sockets);
         #[cfg(feature = "qemu")]
-        let (net, device) = init_network(ctx.cs, ctx.local.net_storage);
+        let (net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
+        let [mqtt_socket_handle, http_socket_handle] = sockets;
 
         let (net_timeout_sender, receiver) = make_channel!(smoltcp::time::Instant, 1);
 
@@ -216,8 +185,8 @@ mod app {
         defmt::info!("Network initialized");
 
         waiter::spawn().ok();
-        mqtt::spawn().ok();
-        http::spawn().ok();
+        mqtt_task::spawn(mqtt_socket_handle).ok();
+        http_task::spawn(http_socket_handle).ok();
 
         defmt::info!("Init done");
 
@@ -245,21 +214,81 @@ mod app {
         exit();
     }
 
-    #[task(priority = 1, shared = [net])]
-    async fn mqtt(ctx: mqtt::Context) {
-        match crate::mqtt::mqtt(ctx).await {};
+    pub mod mqtt_type_inference {
+        use super::*;
+
+        pub type NetLock = impl rtic::Mutex<T = crate::Net>;
+
+        pub fn destruct_and_call_mqtt(
+            ctx: mqtt_task::Context<'static>,
+        ) -> (
+            NetLock,
+            &'static mut poll_share::TokenProviderPlace<NetLock>,
+            &'static mut mqtt::MqttStorage,
+        ) {
+            (ctx.shared.net, ctx.local.token_place, ctx.local.storage)
+        }
     }
 
-    #[task(priority = 1, shared = [net])]
-    async fn http(ctx: http::Context) {
-        match crate::http::http(ctx).await {};
+    #[task(
+        priority = 1,
+        shared = [net],
+        local = [
+            storage: mqtt::MqttStorage = mqtt::MqttStorage::new(),
+            token_place: poll_share::TokenProviderPlace<mqtt::NetLock> = poll_share::TokenProviderPlace::new(),
+        ]
+    )]
+    async fn mqtt_task(ctx: mqtt_task::Context, socket: SocketHandle) {
+        type Context = extend_mut::higher_kinded_types::ForLt!(mqtt_task::Context<'_>);
+
+        extend_mut::static_extend_mut_async::<'_, Context, _, _>(ctx, async |ctx| {
+            let (net, place, storage) = mqtt_type_inference::destruct_and_call_mqtt(ctx);
+            let token = poll_share::TokenProvider::new(place, net);
+
+            match mqtt::mqtt(token, socket, storage).await {}
+        })
+        .await;
+    }
+
+    pub mod http_type_inference {
+        use super::*;
+
+        pub type NetLock = impl rtic::Mutex<T = crate::Net>;
+
+        pub fn destruct_and_call_http(
+            ctx: http_task::Context<'static>,
+        ) -> (
+            NetLock,
+            &'static mut poll_share::TokenProviderPlace<NetLock>,
+            &'static mut http::Storage,
+        ) {
+            (ctx.shared.net, ctx.local.token_place, ctx.local.storage)
+        }
+    }
+
+    #[task(
+        priority = 1,
+        shared = [net],
+        local = [
+            storage: http::Storage = http::Storage::new(),
+            token_place: poll_share::TokenProviderPlace<http::NetLock> = poll_share::TokenProviderPlace::new(),
+        ]
+    )]
+    async fn http_task(ctx: http_task::Context, socket: SocketHandle) {
+        type Context = extend_mut::higher_kinded_types::ForLt!(http_task::Context<'_>);
+
+        extend_mut::static_extend_mut_async::<'_, Context, _, _>(ctx, async |ctx| {
+            let (net, place, storage) = http_type_inference::destruct_and_call_http(ctx);
+            let token = poll_share::TokenProvider::new(place, net);
+
+            match http::http(token, socket, storage).await {}
+        })
+        .await;
     }
 
     #[task(binds = ETHERNET, priority = 1, shared = [device])]
     fn ethernet_isr(mut ctx: ethernet_isr::Context) {
-        let cause = ctx.shared.device.lock(|device| {
-            net_device::isr_handler(device) //
-        });
+        let cause = ctx.shared.device.lock(net_device::isr_handler);
         if cause == Some(net_device::InterruptCause::Receive) {
             poll_network::spawn().ok();
         }
@@ -304,21 +333,16 @@ mod app {
         let dev = &mut ctx.shared.device;
 
         loop {
-            match (&mut *net, &mut *dev).lock(|mut net, device| {
-                let Net { sockets, iface, .. } = &mut net;
+            let (net, dev) = (&mut *net, &mut *dev);
+            let now = smol_now();
 
-                iface.poll(smol_now(), device, sockets)
-            }) {
+            match (net, dev).lock(|net, dev| net.iface.poll(now, dev, &mut net.sockets)) {
                 smoltcp::iface::PollResult::None => break,
                 smoltcp::iface::PollResult::SocketStateChanged => continue,
             };
         }
 
-        let poll_at = net.lock(|mut net| {
-            let Net { sockets, iface, .. } = &mut net;
-
-            iface.poll_at(smol_now(), sockets)
-        });
+        let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &net.sockets));
 
         if let Some(poll_at) = poll_at {
             ctx.local.net_timeout_sender.try_send(poll_at).ok();
@@ -327,7 +351,6 @@ mod app {
 
     #[idle]
     fn idle(_: idle::Context) -> ! {
-        defmt::info!("Idle start");
         loop {
             rtic::export::wfi();
         }

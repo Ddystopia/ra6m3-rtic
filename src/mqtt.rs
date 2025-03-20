@@ -1,26 +1,30 @@
-use core::{convert::Infallible, net::SocketAddr, task::Poll};
+use core::{net::SocketAddr, task::Poll};
 
-use crate::net_channel::{FedToken, NetChannel};
+use crate::{
+    conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT},
+    poll_share::TokenProvider,
+};
 use embedded_nal::{TcpClientStack, TcpError};
 use minimq::{ConfigBuilder, Publication};
-use rtic::Mutex;
-use rtic_monotonics::{fugit::ExtU32, Monotonic};
+use rtic_monotonics::{Monotonic, fugit::ExtU32};
 use smoltcp::{
-    iface::{Interface, SocketHandle, SocketSet},
+    iface::{Interface, SocketHandle},
     socket::tcp::{RecvError, SendError, Socket},
 };
 
 use crate::fugit::Instant;
-use crate::{conf::CLOCK_HZ, net::MQTT_BUFFER_SIZE, Mono, Net};
+use crate::{Mono, conf::CLOCK_HZ, socket_storage::MQTT_BUFFER_SIZE};
 
 const MQTT_CLIENT_PORT: u16 = 58766;
 const RECONNECT_INTERVAL_MS: u32 = 1_000;
 
+pub use crate::app::mqtt_type_inference::NetLock;
+
 pub struct Mqtt {
     pub socket: SocketHandle,
     minimq: Option<minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>>,
-    channel: &'static NetChannel,
     conf: Option<ConfigBuilder<'static, Broker>>,
+    net: TokenProvider<NetLock>,
 }
 
 pub struct Broker(pub SocketAddr);
@@ -28,7 +32,6 @@ pub struct Broker(pub SocketAddr);
 pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
 
 pub struct MqttStorage {
-    pub channel: NetChannel,
     pub buffer: [u8; MQTT_BUFFER_SIZE],
     pub mqtt: Option<Mqtt>,
 }
@@ -37,7 +40,7 @@ pub struct EmbeddedNalAdapter {
     last_connection: Option<Instant<u32, 1, 1000>>,
     port_shift: core::num::Wrapping<u8>,
     socket: Option<SocketHandle>,
-    net: &'static NetChannel,
+    net: TokenProvider<NetLock>,
 }
 
 #[derive(PartialEq, Debug)]
@@ -72,7 +75,6 @@ impl minimq::Broker for Broker {
 impl MqttStorage {
     pub const fn new() -> Self {
         Self {
-            channel: NetChannel::new(),
             mqtt: None,
             buffer: [0; MQTT_BUFFER_SIZE],
         }
@@ -82,42 +84,26 @@ impl MqttStorage {
 impl Mqtt {
     pub fn new(
         socket: SocketHandle,
-        channel: &'static mut NetChannel,
         conf: ConfigBuilder<'static, Broker>,
+        net: TokenProvider<NetLock>,
     ) -> Self {
         Self {
             minimq: None,
             socket,
-            channel,
             conf: Some(conf),
+            net,
         }
     }
 
-    fn minimq(
-        &mut self,
-        _: FedToken,
-    ) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
+    fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
-            let adapter = EmbeddedNalAdapter::new(self.channel, self.socket);
+            let adapter = EmbeddedNalAdapter::new(self.net, self.socket);
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         })
     }
 
-    pub fn poll(&mut self, iface: &mut Interface, sockets: &mut SocketSet<'static>) {
-        self.channel.feed(iface, sockets, |t| {
-            self.minimq(t).poll(poll).unwrap(); // I want to see what kinds of errors it will generate
-        });
-    }
-
-    pub fn with_client<R>(
-        &mut self,
-        iface: &mut Interface,
-        sockets: &mut SocketSet<'static>,
-        f: impl FnOnce(&mut MqttClient) -> R,
-    ) -> R {
-        self.channel.feed(iface, sockets, |t| {
-            f(self.minimq(t).client()) //
-        })
+    pub fn poll(&mut self) {
+        self.minimq().poll(poll).unwrap(); // I want to see what kinds of errors it will generate
     }
 }
 
@@ -134,52 +120,51 @@ fn poll(
     client.publish(publication).unwrap();
 }
 
-pub async fn mqtt(mut ctx: crate::app::mqtt::Context<'_>) -> Infallible {
-    use crate::app::mqtt::Context;
-    type MError = minimq::Error<crate::mqtt::Error>;
+pub async fn mqtt(
+    net: TokenProvider<NetLock>,
+    socket_handle: SocketHandle,
+    storage: &'static mut MqttStorage,
+) -> ! {
+    let conf = minimq::ConfigBuilder::new(
+        Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
+            MQTT_BROKER_IP,
+            MQTT_BROKER_PORT,
+        ))),
+        &mut storage.buffer[..],
+    );
+    let conf = conf.keepalive_interval(30_000);
+    let mqtt = Mqtt::new(socket_handle, conf, net);
+    let mqtt = storage.mqtt.get_or_insert(mqtt);
 
-    #[rustfmt::skip]
-    async fn with_client<R, F>(ctx: &mut Context<'_>, f: F) -> Result<R, MError>
-    where
-        F: FnMut(&mut MqttClient) -> Result<R, MError> + Copy,
-    {
+    let mut with_client = async |f: fn(&mut MqttClient) -> _| {
         core::future::poll_fn(|_| {
-            ctx.shared.net.lock(|Net { sockets, iface, mqtt, .. }| {
-                mqtt.poll(iface, sockets); // ingress
-                match mqtt.with_client(iface, sockets, f) {
-                    Err(minimq::Error::NotReady) => {
-                        mqtt.poll(iface, sockets); // egress
-                        Poll::Pending
-                    },
-                    other => Poll::Ready(other),
+            mqtt.poll(); // ingress
+            match f(mqtt.minimq().client()) {
+                Err(minimq::Error::NotReady) => {
+                    mqtt.poll(); // egress
+                    Poll::Pending
                 }
-            })
+                other => Poll::Ready(other.unwrap()),
+            }
         })
         .await
-    }
+    };
 
-    with_client(&mut ctx, |client| {
-        client.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
-    })
-    .await
-    .unwrap();
+    with_client(|client| client.subscribe(&["/rtic_mqtt/hello_world".into()], &[])).await;
 
-    with_client(&mut ctx, |client| {
+    with_client(|client| {
         if client.subscriptions_pending() {
             return Err(minimq::Error::NotReady);
         }
         Ok(())
     })
-    .await
-    .unwrap();
+    .await;
 
     defmt::info!("Subscribed to topics");
 
     core::future::poll_fn(|_| {
-        ctx.shared.net.lock(|net| {
-            net.mqtt.poll(&mut net.iface, &mut net.sockets);
-        });
-        Poll::<Infallible>::Pending
+        mqtt.poll();
+        Poll::<!>::Pending
     })
     .await
 }
@@ -193,8 +178,8 @@ mod waiter {
         task::{Context, Poll},
     };
     use rtic_monotonics::{
-        fugit::{ExtU32, Instant},
         Monotonic,
+        fugit::{ExtU32, Instant},
     };
     use stackfuture::StackFuture;
     use static_cell::StaticCell;
@@ -208,7 +193,7 @@ mod waiter {
     static WAITER: AtomicRefCell<Option<Pin<&'static mut Waiter>>> = AtomicRefCell::new(None);
 
     pub fn setup_waiter(mut at: Instant<u32, 1, 1000>) {
-        let waker = crate::app::mqtt::waker();
+        let waker = crate::app::mqtt_task::waker();
         let mut cx = Context::from_waker(&waker);
 
         let mut pin_guard = WAITER.borrow_mut();
@@ -239,7 +224,7 @@ mod waiter {
 }
 
 impl EmbeddedNalAdapter {
-    pub const fn new(net: &'static NetChannel, handle: SocketHandle) -> Self {
+    pub const fn new(net: TokenProvider<NetLock>, handle: SocketHandle) -> Self {
         Self {
             last_connection: None,
             port_shift: core::num::Wrapping(0),
@@ -252,17 +237,16 @@ impl EmbeddedNalAdapter {
         handle: SocketHandle,
         f: impl FnOnce(&mut Interface, &mut Socket<'_>) -> R,
     ) -> R {
-        let (iface, sockets) = self.net.take();
-        let socket = sockets.get_mut::<Socket>(handle);
-        let ret = f(&mut *iface, &mut *socket);
+        self.net.lock(|net| {
+            let socket = net.sockets.get_mut::<Socket>(handle);
+            let ret = f(&mut net.iface, &mut *socket);
 
-        let waker = crate::app::mqtt::waker();
-        socket.register_recv_waker(&waker);
-        socket.register_send_waker(&waker);
+            let waker = crate::app::mqtt_task::waker();
+            socket.register_recv_waker(&waker);
+            socket.register_send_waker(&waker);
 
-        self.net.put(iface, sockets);
-
-        ret
+            ret
+        })
     }
 }
 

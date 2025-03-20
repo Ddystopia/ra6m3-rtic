@@ -126,22 +126,24 @@ pub fn isr_handler(device: &mut Dev) -> Option<InterruptCause> {
 
 #[inline(always)]
 unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
-    let irq_status = EthernetIntStatus(ETH_BASE, 0);
-    EthernetIntClear(ETH_BASE, irq_status);
+    let irq_status;
+    unsafe {
+        irq_status = EthernetIntStatus(ETH_BASE, 0);
+        EthernetIntClear(ETH_BASE, irq_status);
 
-    if irq_status & ETH_INT_PHY != 0 {
-        let mr1 = EthernetPHYRead(ETH_BASE, PHY_MR1 as u8);
-        if mr1 & PHY_MR1_LINK != 0 {
-            defmt::info!("Link up");
-            // priv_stellaris_eth_dev.link_up = true;
-            // netdev->event_callback(netdev, NETDEV_EVENT_LINK_UP);
-        } else {
-            defmt::info!("Link down");
-            // priv_stellaris_eth_dev.link_up = false;
-            // netdev->event_callback(netdev, NETDEV_EVENT_LINK_DOWN);
+        if irq_status & ETH_INT_PHY != 0 {
+            let mr1 = EthernetPHYRead(ETH_BASE, PHY_MR1 as u8);
+            if mr1 & PHY_MR1_LINK != 0 {
+                defmt::info!("Link up");
+                // priv_stellaris_eth_dev.link_up = true;
+                // netdev->event_callback(netdev, NETDEV_EVENT_LINK_UP);
+            } else {
+                defmt::info!("Link down");
+                // priv_stellaris_eth_dev.link_up = false;
+                // netdev->event_callback(netdev, NETDEV_EVENT_LINK_DOWN);
+            }
         }
     }
-
     if irq_status & ETH_INT_RXOF != 0 || irq_status & ETH_INT_RXER != 0 {
         defmt::warn!("RXOF or RX");
         // netdev->event_callback(netdev, NETDEV_EVENT_RX_TIMEOUT);

@@ -81,19 +81,23 @@ unsafe impl defmt::Logger for Logger {
     }
 
     unsafe fn release() {
-        // safety: accessing the `static mut` is OK because we have disabled interrupts.
-        ENCODER.end_frame(do_write);
+        unsafe {
+            // safety: accessing the `static mut` is OK because we have disabled interrupts.
+            ENCODER.end_frame(do_write);
 
-        TAKEN.store(false, Ordering::Relaxed);
-        if INTERRUPTS_ACTIVE.load(Ordering::Relaxed) {
-            // re-enable interrupts
-            interrupt::enable()
+            TAKEN.store(false, Ordering::Relaxed);
+            if INTERRUPTS_ACTIVE.load(Ordering::Relaxed) {
+                // re-enable interrupts
+                interrupt::enable()
+            }
         }
     }
 
     unsafe fn write(bytes: &[u8]) {
-        // safety: accessing the `static mut` is OK because we have disabled interrupts.
-        ENCODER.write(bytes, do_write);
+        unsafe {
+            // safety: accessing the `static mut` is OK because we have disabled interrupts.
+            ENCODER.write(bytes, do_write);
+        }
     }
 }
 

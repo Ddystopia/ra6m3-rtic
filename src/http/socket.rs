@@ -1,15 +1,16 @@
 use core::{future::poll_fn, marker::PhantomData, task::Poll};
 
-use rtic_monotonics::{fugit::Duration, Monotonic};
+use rtic::Mutex;
+use rtic_monotonics::{Monotonic, fugit::Duration};
 use smoltcp::iface::SocketHandle;
 use smoltcp::socket::tcp::State;
 
-use crate::{net_channel::NetChannel, Mono};
+use crate::{poll_share::TokenProvider, Mono, Net};
 
 pub struct Timer;
-pub struct Socket(SocketHandle, &'static NetChannel);
-pub struct Read<'a>(SocketHandle, &'static NetChannel, PhantomData<&'a ()>);
-pub struct Write<'a>(SocketHandle, &'static NetChannel, PhantomData<&'a ()>);
+pub struct Socket<R: Mutex<T = Net> + 'static>(SocketHandle, TokenProvider<R>);
+pub struct Read<'a, R: 'static>(SocketHandle, TokenProvider<R>, PhantomData<&'a ()>);
+pub struct Write<'a, R: 'static>(SocketHandle, TokenProvider<R>, PhantomData<&'a ()>);
 
 #[derive(Debug, defmt::Format)]
 pub enum Error {
@@ -29,9 +30,9 @@ impl From<smoltcp::socket::tcp::SendError> for Error {
     }
 }
 
-impl Socket {
-    pub const fn new(handle: SocketHandle, channel: &'static NetChannel) -> Self {
-        Self(handle, channel)
+impl<R: Mutex<T = Net>> Socket<R> {
+    pub const fn new(handle: SocketHandle, net: TokenProvider<R>) -> Self {
+        Self(handle, net)
     }
 }
 
@@ -41,15 +42,15 @@ impl picoserve::io::Error for Error {
     }
 }
 
-impl picoserve::io::ErrorType for Read<'_> {
+impl<R> picoserve::io::ErrorType for Read<'_, R> {
     type Error = Error;
 }
 
-impl picoserve::io::ErrorType for Write<'_> {
+impl<R> picoserve::io::ErrorType for Write<'_, R> {
     type Error = Error;
 }
 
-impl picoserve::io::Read for Read<'_> {
+impl<R: Mutex<T = Net>> picoserve::io::Read for Read<'_, R> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         if buf.is_empty() {
             return Ok(0);
@@ -58,8 +59,8 @@ impl picoserve::io::Read for Read<'_> {
         let mut read = 0;
 
         poll_fn(|cx| {
-            self.1.with(|_iface, sockets| {
-                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(self.0);
+            self.1.lock(|net| {
+                let socket = net.sockets.get_mut::<smoltcp::socket::tcp::Socket>(self.0);
 
                 if !socket.can_recv() {
                     // todo: if *will* become `may_recv`, return `Pending` too
@@ -87,7 +88,7 @@ impl picoserve::io::Read for Read<'_> {
     }
 }
 
-impl picoserve::io::Write for Write<'_> {
+impl<R: Mutex<T = Net>> picoserve::io::Write for Write<'_, R> {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         if buf.is_empty() {
             return Ok(0);
@@ -96,8 +97,8 @@ impl picoserve::io::Write for Write<'_> {
         let mut written = 0;
 
         poll_fn(|cx| {
-            self.1.with(|_iface, sockets| {
-                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(self.0);
+            self.1.lock(|net| {
+                let socket = net.sockets.get_mut::<smoltcp::socket::tcp::Socket>(self.0);
 
                 if !socket.can_send() {
                     // todo: if *will* become `may_send`, return `Pending` too
@@ -127,12 +128,12 @@ impl picoserve::io::Write for Write<'_> {
     }
 }
 
-impl picoserve::io::Socket for Socket {
+impl<R: Mutex<T = Net>> picoserve::io::Socket for Socket<R> {
     type Error = Error;
 
-    type ReadHalf<'a> = Read<'a>;
+    type ReadHalf<'a> = Read<'a, R>;
 
-    type WriteHalf<'a> = Write<'a>;
+    type WriteHalf<'a> = Write<'a, R>;
 
     fn split(&mut self) -> (Self::ReadHalf<'_>, Self::WriteHalf<'_>) {
         (
@@ -146,11 +147,10 @@ impl picoserve::io::Socket for Socket {
         _timeouts: &picoserve::Timeouts<Timer::Duration>,
         _timer: &mut Timer,
     ) -> Result<(), picoserve::Error<Self::Error>> {
-        let &Self(handle, channel) = &self;
-
+        let handle = self.0;
         poll_fn(|cx| {
-            channel.with(|_iface, sockets| {
-                let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+            self.1.lock(|net| {
+                let socket = net.sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
 
                 loop {
                     match socket.state() {
@@ -179,12 +179,11 @@ impl picoserve::io::Socket for Socket {
     }
 }
 
-impl Drop for Socket {
+impl<R: Mutex<T = Net>> Drop for Socket<R> {
     fn drop(&mut self) {
-        let &Self(handle, channel) = &*self;
-
-        channel.with(|_iface, sockets| {
-            let socket = sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
+        let handle = self.0;
+        self.1.lock(|net| {
+            let socket = net.sockets.get_mut::<smoltcp::socket::tcp::Socket>(handle);
             socket.abort(); // maybe `close` and wait? (in `async fn shutdown`)
         });
     }
