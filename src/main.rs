@@ -42,7 +42,7 @@ use smoltcp::{
     wire::{self, HardwareAddress, IpCidr},
 };
 
-use socket_storage::SocketStorage;
+use socket_storage::{SocketStorage, TcpSocketStorage};
 
 defmt::timestamp!("{=usize}", {
     use core::sync::atomic::{AtomicUsize, Ordering};
@@ -82,11 +82,15 @@ fn init_network(
     let mut iface = Interface::new(conf, &mut device, smol_now());
     let mut sockets = SocketSet::new(&mut storage.sockets[..]);
 
-    for s in storage.tcp_sockets.iter_mut() {
+    let mut add_tcp_socket = |s: &'static mut TcpSocketStorage| -> SocketHandle {
         let rx = tcp::SocketBuffer::new(&mut s.rx_payload[..]);
         let tx = tcp::SocketBuffer::new(&mut s.tx_payload[..]);
-        sockets.add(tcp::Socket::new(rx, tx));
-    }
+        sockets.add(tcp::Socket::new(rx, tx))
+    };
+
+    let [mqtt, http, ..] = &mut storage.tcp_sockets;
+    let mqtt = add_tcp_socket(mqtt);
+    let http = add_tcp_socket(http);
 
     for s in storage.udp_sockets.iter_mut() {
         let rx = udp::PacketBuffer::new(&mut s.rx_metadata[..], &mut s.rx_payload[..]);
@@ -109,13 +113,6 @@ fn init_network(
         .routes_mut()
         .add_default_ipv6_route(IP_V6_GATEWAY)
         .unwrap();
-
-    let [mqtt, http] = {
-        let mut sockets_i = sockets.iter().map(|s| s.0);
-        let mqtt = sockets_i.next().expect("Socket must be available");
-        let http = sockets_i.next().expect("Socket must be available");
-        [mqtt, http]
-    };
 
     (Net { iface, sockets }, device, [mqtt, http])
 }
