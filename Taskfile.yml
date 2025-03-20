@@ -39,8 +39,11 @@ tasks:
            sudo ip tuntap add tap0 mode tap user $USER ;
            sudo ip addr flush dev tap0 ;
            sudo ip link set tap0 up ;
-           sudo ip addr add 192.168.69.100/24 dev tap0 ; # qemu device
+           # sudo ip addr add 192.168.69.100/24 dev tap0 ; # do not add qemu device
            sudo ip addr add 192.168.69.20/24 dev tap0 ; # mqtt broker
+           sudo ip addr add 192.168.69.1/24 dev tap0 ; # this device
+           sudo ip -6 addr add fe80::1/64 dev tap0 ;
+           sudo ip -6 addr add fdaa::1/64 dev tap0 ;
            sudo ip -6 addr add fe80::100/64 dev tap0 ;
            sudo ip -6 addr add fdaa::100/64 dev tap0 ;
            sudo ip -6 route add fe80::/64 dev tap0 || true; # RTNETLINK answers: File exists -- idk what is it
