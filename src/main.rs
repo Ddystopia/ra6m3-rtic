@@ -235,16 +235,11 @@ mod app {
             token_place: poll_share::TokenProviderPlace<mqtt::NetLock> = poll_share::TokenProviderPlace::new(),
         ]
     )]
-    async fn mqtt_task(ctx: mqtt_task::Context, socket: SocketHandle) {
-        type Context = extend_mut::higher_kinded_types::ForLt!(mqtt_task::Context<'_>);
+    async fn mqtt_task(ctx: mqtt_task::Context, socket: SocketHandle) -> ! {
+        let (net, place, storage) = mqtt_type_inference::destruct_and_call_mqtt(ctx);
+        let token = poll_share::TokenProvider::new(place, net);
 
-        extend_mut::static_extend_mut_async::<'_, Context, _, _>(ctx, async |ctx| {
-            let (net, place, storage) = mqtt_type_inference::destruct_and_call_mqtt(ctx);
-            let token = poll_share::TokenProvider::new(place, net);
-
-            match mqtt::mqtt(token, socket, storage).await {}
-        })
-        .await;
+        match mqtt::mqtt(token, socket, storage).await {}
     }
 
     pub mod http_type_inference {
@@ -271,16 +266,11 @@ mod app {
             token_place: poll_share::TokenProviderPlace<http::NetLock> = poll_share::TokenProviderPlace::new(),
         ]
     )]
-    async fn http_task(ctx: http_task::Context, socket: SocketHandle) {
-        type Context = extend_mut::higher_kinded_types::ForLt!(http_task::Context<'_>);
+    async fn http_task(ctx: http_task::Context, socket: SocketHandle) -> ! {
+        let (net, place, storage) = http_type_inference::destruct_and_call_http(ctx);
+        let token = poll_share::TokenProvider::new(place, net);
 
-        extend_mut::static_extend_mut_async::<'_, Context, _, _>(ctx, async |ctx| {
-            let (net, place, storage) = http_type_inference::destruct_and_call_http(ctx);
-            let token = poll_share::TokenProvider::new(place, net);
-
-            match http::http(token, socket, storage).await {}
-        })
-        .await;
+        match http::http(token, socket, storage).await {}
     }
 
     #[task(binds = ETHERNET, priority = 1, shared = [device])]

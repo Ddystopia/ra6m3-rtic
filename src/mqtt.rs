@@ -1,4 +1,7 @@
-use core::{net::SocketAddr, task::Poll};
+use core::{
+    net::SocketAddr,
+    task::{Poll, Waker},
+};
 
 use crate::{
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT},
@@ -25,6 +28,7 @@ pub struct Mqtt {
     minimq: Option<minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>>,
     conf: Option<ConfigBuilder<'static, Broker>>,
     net: TokenProvider<NetLock>,
+    waker: Waker,
 }
 
 pub struct Broker(pub SocketAddr);
@@ -41,6 +45,7 @@ pub struct EmbeddedNalAdapter {
     port_shift: core::num::Wrapping<u8>,
     socket: Option<SocketHandle>,
     net: TokenProvider<NetLock>,
+    waker: Waker,
 }
 
 #[derive(PartialEq, Debug)]
@@ -86,18 +91,20 @@ impl Mqtt {
         socket: SocketHandle,
         conf: ConfigBuilder<'static, Broker>,
         net: TokenProvider<NetLock>,
+        waker: Waker,
     ) -> Self {
         Self {
             minimq: None,
             socket,
             conf: Some(conf),
             net,
+            waker,
         }
     }
 
     fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
-            let adapter = EmbeddedNalAdapter::new(self.net, self.socket);
+            let adapter = EmbeddedNalAdapter::new(self.net, self.socket, self.waker.clone());
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         })
     }
@@ -132,8 +139,9 @@ pub async fn mqtt(
         ))),
         &mut storage.buffer[..],
     );
+    let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
     let conf = conf.keepalive_interval(30_000);
-    let mqtt = Mqtt::new(socket_handle, conf, net);
+    let mqtt = Mqtt::new(socket_handle, conf, net, waker);
     let mqtt = storage.mqtt.get_or_insert(mqtt);
 
     let mut with_client = async |f: fn(&mut MqttClient) -> _| {
@@ -175,7 +183,7 @@ mod waiter {
         future::Future,
         pin::Pin,
         sync::Exclusive,
-        task::{Context, Poll},
+        task::{Context, Poll, Waker},
     };
     use rtic_monotonics::{
         Monotonic,
@@ -192,9 +200,8 @@ mod waiter {
     // Something like `AtomicPtr` would be enough, but I don't want to use unsafe code
     static WAITER: AtomicRefCell<Option<Pin<&'static mut Waiter>>> = AtomicRefCell::new(None);
 
-    pub fn setup_waiter(mut at: Instant<u32, 1, 1000>) {
-        let waker = crate::app::mqtt_task::waker();
-        let mut cx = Context::from_waker(&waker);
+    pub fn setup_waiter(mut at: Instant<u32, 1, 1000>, waker: &Waker) {
+        let mut cx = Context::from_waker(waker);
 
         let mut pin_guard = WAITER.borrow_mut();
 
@@ -224,12 +231,13 @@ mod waiter {
 }
 
 impl EmbeddedNalAdapter {
-    pub const fn new(net: TokenProvider<NetLock>, handle: SocketHandle) -> Self {
+    pub const fn new(net: TokenProvider<NetLock>, handle: SocketHandle, waker: Waker) -> Self {
         Self {
             last_connection: None,
             port_shift: core::num::Wrapping(0),
             socket: Some(handle),
             net,
+            waker,
         }
     }
     fn with<R>(
@@ -241,9 +249,8 @@ impl EmbeddedNalAdapter {
             let socket = net.sockets.get_mut::<Socket>(handle);
             let ret = f(&mut net.iface, &mut *socket);
 
-            let waker = crate::app::mqtt_task::waker();
-            socket.register_recv_waker(&waker);
-            socket.register_send_waker(&waker);
+            socket.register_recv_waker(&self.waker);
+            socket.register_send_waker(&self.waker);
 
             ret
         })
@@ -270,6 +277,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
         remote: core::net::SocketAddr,
     ) -> embedded_nal::nb::Result<(), Self::Error> {
         let now = Mono::now();
+        let waker = &self.waker;
         defmt::trace!("Connecting poll: got {}", now.ticks());
 
         let mut should_try_connect = true;
@@ -280,7 +288,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
 
                     // This is not async function and is not pinned, so let the
                     // global state be our `Pin<&mut Self>`.
-                    waiter::setup_waiter(last + RECONNECT_INTERVAL_MS.millis::<1, 1000>());
+                    waiter::setup_waiter(last + RECONNECT_INTERVAL_MS.millis::<1, 1000>(), waker);
                 }
             }
         }
