@@ -86,7 +86,7 @@ tasks:
         -semihosting-config enable=on,target=native
         -kernel target/{{.TARGET}}/{{.PROFILE}}/project
         | defmt-print -v -e target/{{.TARGET}}/{{.PROFILE}}/project
-        # -S -s
+      # -S -s # gdb on port 1234
       # - task: remove-tap
 
 

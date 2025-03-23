@@ -1,5 +1,10 @@
 use core::{future::poll_fn, task::Poll};
 
+#[cfg(feature = "tls")]
+use embedded_tls::{TlsConfig, TlsContext, UnsecureProvider};
+#[cfg(feature = "tls")]
+use tls_socket::{Rng, TlsSocket};
+
 use make_app::AppRouter;
 use picoserve::Config;
 use rtic_monotonics::fugit::ExtU32;
@@ -8,20 +13,30 @@ use socket::{Socket, Timer};
 
 use crate::{poll_share::TokenProvider, socket_storage::HTTP_BUFFER_SIZE};
 
+// todo: use https://docs.rs/smoltcp/latest/smoltcp/socket/tcp/struct.Socket.html#method.set_timeout and others
+
 mod socket;
+#[cfg(feature = "tls")]
+mod tls_socket;
 
 pub type AppState = ();
 pub use crate::app::http_type_inference::NetLock;
 
 pub struct Storage {
-    pub buf: [u8; HTTP_BUFFER_SIZE],
     pub app: Option<picoserve::Router<AppRouter, AppState>>,
+    pub buf: [u8; HTTP_BUFFER_SIZE],
+    pub tls_tx: [u8; 2048],
+    pub tls_rx: [u8; 2048],
 }
 
 impl Storage {
     pub const fn new() -> Self {
-        let buf = [0; HTTP_BUFFER_SIZE];
-        Self { buf, app: None }
+        Self {
+            app: None,
+            buf: [0; HTTP_BUFFER_SIZE],
+            tls_tx: [0; 2048],
+            tls_rx: [0; 2048],
+        }
     }
 }
 
@@ -35,7 +50,8 @@ pub async fn http(
     loop {
         net.lock(|net| {
             let socket = net.sockets.get_mut::<tcp::Socket>(socket_handle);
-            socket.listen(80).unwrap();
+            let port = if cfg!(feature = "tls") { 443 } else { 80 };
+            socket.listen(port).unwrap();
             crate::app::poll_network::spawn().ok();
         });
 
@@ -53,15 +69,29 @@ pub async fn http(
         })
         .await;
 
-        handle_connection(&app, socket, &mut storage.buf).await
+        #[cfg(feature = "tls")]
+        let socket = {
+            let tls_config = TlsConfig::new().with_server_name("example.com");
+            let mut socket = TlsSocket::new(socket, &mut storage.tls_rx, &mut storage.tls_tx);
+            let mut rng = Rng;
+            let tls_ctx = TlsContext::new(&tls_config, UnsecureProvider::new(&mut rng));
+            socket.open(tls_ctx).await.unwrap();
+
+            socket
+        };
+
+        handle_connection(&app, socket, &mut storage.buf).await;
     }
 }
 
-async fn handle_connection(
+async fn handle_connection<S, E>(
     app: &picoserve::Router<AppRouter, AppState>,
-    socket: Socket<NetLock>,
+    socket: S,
     buf: &mut [u8],
-) {
+) where
+    S: picoserve::io::Socket<Error = E>,
+    E: defmt::Format + picoserve::io::Error,
+{
     let config = Config::new(picoserve::Timeouts {
         start_read_request: Some(5000.millis()),
         read_request: Some(1000.millis()),
@@ -82,8 +112,6 @@ mod make_app {
 
     use super::AppState;
 
-    pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
-
     const HELLO_WORLD: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -97,7 +125,21 @@ mod make_app {
 </html>
 "#;
 
+    pub trait Infer {
+        type AppRouter: picoserve::routing::PathRouter<AppState>;
+        fn make_app() -> picoserve::Router<Self::AppRouter, AppState>;
+    }
+
+    impl Infer for () {
+        type AppRouter = impl picoserve::routing::PathRouter<AppState>;
+
+        fn make_app() -> picoserve::Router<AppRouter, AppState> {
+            picoserve::Router::new().route("/", get_service(File::html(HELLO_WORLD)))
+        }
+    }
+    pub type AppRouter = <() as Infer>::AppRouter;
+
     pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
-        picoserve::Router::new().route("/", get_service(File::html(HELLO_WORLD)))
+        <() as Infer>::make_app()
     }
 }

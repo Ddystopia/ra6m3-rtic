@@ -29,13 +29,22 @@ stackfuture = { version = "0.3.0", default-features = false }
 atomic_refcell = "0.1.13"
 static_cell = "2.1.0"
 picoserve = { version = "0.15.0", features = ["defmt"] }
+rand_core = "0.6.4"
+replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
+# embedded-tls = { version = "0.17.0", default-features = false, features = ["defmt"] }
+embedded-tls = { path = "/home/ddystopia/code/clones/embedded-tls", default-features = false, features = ["defmt"], optional = true }
+
+[profile.release]
+opt-level = 's'
 
 [profile.dev]
 opt-level = 1
 
 [features]
 default = ["qemu"]
+# default = ["qemu", "tls"]
 # default = ["ra6m3"]
+tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra6m3"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
 
