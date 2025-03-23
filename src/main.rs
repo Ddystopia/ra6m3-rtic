@@ -2,7 +2,7 @@
 #![no_std]
 #![feature(never_type)]
 #![feature(exclusive_wrapper)]
-#![feature(type_alias_impl_trait)]
+#![feature(impl_trait_in_assoc_type)]
 
 /**
 
@@ -214,16 +214,39 @@ mod app {
     pub mod mqtt_type_inference {
         use super::*;
 
-        pub type NetLock = impl rtic::Mutex<T = crate::Net>;
+        pub trait Infere<U> {
+            type T: rtic::Mutex<T = crate::Net>;
+            fn destruct(
+                ctx: U,
+            ) -> (
+                Self::T,
+                &'static mut poll_share::TokenProviderPlace<Self::T>,
+                &'static mut mqtt::Storage,
+            );
+        }
 
+        impl Infere<mqtt_task::Context<'static>> for () {
+            type T = impl rtic::Mutex<T = crate::Net>;
+            fn destruct(
+                ctx: mqtt_task::Context<'static>,
+            ) -> (
+                Self::T,
+                &'static mut poll_share::TokenProviderPlace<Self::T>,
+                &'static mut mqtt::Storage,
+            ) {
+                (ctx.shared.net, ctx.local.token_place, ctx.local.storage)
+            }
+        }
+
+        pub type NetLock = <() as Infere<mqtt_task::Context<'static>>>::T;
         pub fn destruct_and_call_mqtt(
             ctx: mqtt_task::Context<'static>,
         ) -> (
             NetLock,
             &'static mut poll_share::TokenProviderPlace<NetLock>,
-            &'static mut mqtt::MqttStorage,
+            &'static mut mqtt::Storage,
         ) {
-            (ctx.shared.net, ctx.local.token_place, ctx.local.storage)
+            <() as Infere::<mqtt_task::Context<'static>>>::destruct(ctx)
         }
     }
 
@@ -231,7 +254,7 @@ mod app {
         priority = 1,
         shared = [net],
         local = [
-            storage: mqtt::MqttStorage = mqtt::MqttStorage::new(),
+            storage: mqtt::Storage = mqtt::Storage::new(),
             token_place: poll_share::TokenProviderPlace<mqtt::NetLock> = poll_share::TokenProviderPlace::new(),
         ]
     )]
@@ -245,8 +268,31 @@ mod app {
     pub mod http_type_inference {
         use super::*;
 
-        pub type NetLock = impl rtic::Mutex<T = crate::Net>;
+        pub trait Infere<U> {
+            type T: rtic::Mutex<T = crate::Net>;
+            fn destruct(
+                ctx: U,
+            ) -> (
+                Self::T,
+                &'static mut poll_share::TokenProviderPlace<Self::T>,
+                &'static mut http::Storage,
+            );
+        }
 
+        impl Infere<http_task::Context<'static>> for () {
+            type T = impl rtic::Mutex<T = crate::Net>;
+            fn destruct(
+                ctx: http_task::Context<'static>,
+            ) -> (
+                Self::T,
+                &'static mut poll_share::TokenProviderPlace<Self::T>,
+                &'static mut http::Storage,
+            ) {
+                (ctx.shared.net, ctx.local.token_place, ctx.local.storage)
+            }
+        }
+
+        pub type NetLock = <() as Infere<http_task::Context<'static>>>::T;
         pub fn destruct_and_call_http(
             ctx: http_task::Context<'static>,
         ) -> (
@@ -254,7 +300,7 @@ mod app {
             &'static mut poll_share::TokenProviderPlace<NetLock>,
             &'static mut http::Storage,
         ) {
-            (ctx.shared.net, ctx.local.token_place, ctx.local.storage)
+            <() as Infere::<http_task::Context<'static>>>::destruct(ctx)
         }
     }
 

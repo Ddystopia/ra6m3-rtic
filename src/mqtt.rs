@@ -35,7 +35,7 @@ pub struct Broker(pub SocketAddr);
 
 pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
 
-pub struct MqttStorage {
+pub struct Storage {
     pub buffer: [u8; MQTT_BUFFER_SIZE],
     pub mqtt: Option<Mqtt>,
 }
@@ -77,7 +77,7 @@ impl minimq::Broker for Broker {
     }
 }
 
-impl MqttStorage {
+impl Storage {
     pub const fn new() -> Self {
         Self {
             mqtt: None,
@@ -130,7 +130,7 @@ fn poll(
 pub async fn mqtt(
     net: TokenProvider<NetLock>,
     socket_handle: SocketHandle,
-    storage: &'static mut MqttStorage,
+    storage: &'static mut Storage,
 ) -> ! {
     let conf = minimq::ConfigBuilder::new(
         Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
