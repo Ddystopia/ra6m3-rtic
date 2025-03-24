@@ -18,6 +18,11 @@ mod socket;
 #[cfg(feature = "tls")]
 mod tls_socket;
 
+// const TLS_TX_SIZE: usize = 16_640;
+// const TLS_RX_SIZE: usize = 16_640;
+const TLS_TX_SIZE: usize = 13_640;
+const TLS_RX_SIZE: usize = 16_640;
+
 pub type AppState = ();
 pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
 pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
@@ -25,8 +30,8 @@ pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
 pub struct Storage {
     pub app: Option<picoserve::Router<AppRouter, AppState>>,
     pub buf: [u8; HTTP_BUFFER_SIZE],
-    pub tls_tx: [u8; 2048],
-    pub tls_rx: [u8; 2048],
+    pub tls_tx: [u8; TLS_TX_SIZE],
+    pub tls_rx: [u8; TLS_RX_SIZE],
 }
 
 impl Storage {
@@ -34,8 +39,8 @@ impl Storage {
         Self {
             app: None,
             buf: [0; HTTP_BUFFER_SIZE],
-            tls_tx: [0; 2048],
-            tls_rx: [0; 2048],
+            tls_tx: [0; TLS_TX_SIZE],
+            tls_rx: [0; TLS_RX_SIZE],
         }
     }
 }
