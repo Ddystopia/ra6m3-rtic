@@ -2,6 +2,9 @@ use core::cell::RefCell;
 
 use rtic::Mutex;
 
+pub trait NetMutex: Mutex<T = crate::Net> + 'static { }
+impl<T: Mutex<T = crate::Net> + 'static> NetMutex for T { }
+
 #[derive(Debug)]
 pub struct TokenProvider<R: 'static>(&'static RefCell<R>);
 pub struct TokenProviderPlace<R: Mutex>(Option<RefCell<R>>);

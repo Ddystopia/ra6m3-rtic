@@ -33,6 +33,8 @@ rand_core = "0.6.4"
 replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
 # embedded-tls = { version = "0.17.0", default-features = false, features = ["defmt"] }
 embedded-tls = { path = "/home/ddystopia/code/clones/embedded-tls", default-features = false, features = ["defmt"], optional = true }
+embedded-io-async = "0.6.1"
+futures-util = { version = "0.3.31", default-features = false }
 
 [profile.release]
 opt-level = 's'

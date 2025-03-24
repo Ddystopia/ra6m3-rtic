@@ -23,6 +23,7 @@ mod net_device;
 mod conf;
 mod http;
 mod mqtt;
+mod socket;
 #[cfg(feature = "ra6m3")]
 mod net_device;
 mod poll_share;
