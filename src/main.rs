@@ -279,6 +279,7 @@ mod app {
         let net = &mut ctx.shared.net;
         let dev = &mut ctx.shared.device;
 
+        // todo: somewhat a lot of polls...
         loop {
             let (net, dev) = (&mut *net, &mut *dev);
             let now = smol_now();

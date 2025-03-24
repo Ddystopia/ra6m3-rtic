@@ -385,11 +385,12 @@ impl<M: NetMutex> TcpWriter<'_, M> {
 }
 
 impl<M: NetMutex> TcpSocket<M> {
-    pub fn new(net: TokenProvider<M>, handle: SocketHandle) -> Self {
+    pub const fn new(net: TokenProvider<M>, handle: SocketHandle) -> Self {
         Self {
             io: SocketInner { net, handle },
         }
     }
+
     /// Return the maximum number of bytes inside the recv buffer.
     pub fn recv_capacity(&self) -> usize {
         self.io.recv_capacity()

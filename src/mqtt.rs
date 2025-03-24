@@ -1,24 +1,26 @@
 use core::{
     net::SocketAddr,
-    task::{Poll, Waker},
+    pin::{Pin, pin},
+    task::{Context, Poll, Waker},
 };
 
 use crate::{
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT},
     poll_share::TokenProvider,
+    socket::{ConnectError, TcpSocket},
 };
-use embedded_nal::{TcpClientStack, TcpError};
+use embedded_nal::{TcpClientStack, TcpError, nb};
 use minimq::{ConfigBuilder, Publication};
 use rtic_monotonics::{Monotonic, fugit::ExtU32};
 use smoltcp::{
     iface::{Interface, SocketHandle},
-    socket::tcp::{RecvError, SendError, Socket},
+    socket::tcp::Socket,
 };
 
 use crate::fugit::Instant;
 use crate::{Mono, conf::CLOCK_HZ, socket_storage::MQTT_BUFFER_SIZE};
 
-const MQTT_CLIENT_PORT: u16 = 58766;
+const MQTT_CLIENT_PORT: u16 = 58737;
 const RECONNECT_INTERVAL_MS: u32 = 1_000;
 
 pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
@@ -29,6 +31,10 @@ pub struct Mqtt {
     conf: Option<ConfigBuilder<'static, Broker>>,
     net: TokenProvider<NetLock>,
     waker: Waker,
+    alloc: Option<&'static mut MqttAlocation>,
+}
+pub struct MqttAlocation {
+    connect_future_place: Option<ConnectFut>,
 }
 
 pub struct Broker(pub SocketAddr);
@@ -38,22 +44,30 @@ pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapte
 pub struct Storage {
     pub buffer: [u8; MQTT_BUFFER_SIZE],
     pub mqtt: Option<Mqtt>,
+    pub alloc: MqttAlocation,
 }
+
+// type ConnectFut = impl Future<Output = (TcpSocket<NetLock>, Result<(), ConnectError>)>;
+type ConnectFut =
+    stackfuture::StackFuture<'static, (TcpSocket<NetLock>, Result<(), ConnectError>), 120>;
 
 pub struct EmbeddedNalAdapter {
     last_connection: Option<Instant<u32, 1, 1000>>,
     port_shift: core::num::Wrapping<u8>,
-    socket: Option<SocketHandle>,
+    socket_handle: Option<SocketHandle>,
     net: TokenProvider<NetLock>,
     waker: Waker,
+    connect_future: Pin<&'static mut Option<ConnectFut>>,
+    socket: Option<TcpSocket<NetLock>>,
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, defmt::Format)]
 pub enum Error {
     SocketUsed,
     PipeClosed,
-    SendError(SendError),
-    RecvError(RecvError),
+    ConnectError(crate::socket::ConnectError),
+    SendError(crate::socket::Error),
+    RecvError(crate::socket::Error),
 }
 
 impl embedded_time::Clock for Mono {
@@ -82,6 +96,9 @@ impl Storage {
         Self {
             mqtt: None,
             buffer: [0; MQTT_BUFFER_SIZE],
+            alloc: MqttAlocation {
+                connect_future_place: None,
+            },
         }
     }
 }
@@ -92,6 +109,7 @@ impl Mqtt {
         conf: ConfigBuilder<'static, Broker>,
         net: TokenProvider<NetLock>,
         waker: Waker,
+        alloc: &'static mut MqttAlocation,
     ) -> Self {
         Self {
             minimq: None,
@@ -99,18 +117,66 @@ impl Mqtt {
             conf: Some(conf),
             net,
             waker,
+            alloc: Some(alloc),
         }
     }
 
     fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
-            let adapter = EmbeddedNalAdapter::new(self.net, self.socket, self.waker.clone());
+            let alloc = self.alloc.take().unwrap();
+            let adapter = EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone());
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         })
     }
 
-    pub fn poll(&mut self) {
-        self.minimq().poll(poll).unwrap(); // I want to see what kinds of errors it will generate
+    pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<Error>>> {
+        match self.minimq().poll(poll).map(|_| ()) {
+            Ok(()) | Err(minimq::Error::NotReady) => Poll::Pending,
+            Err(other) => Poll::Ready(Err(other)),
+        }
+    }
+
+    pub async fn join(&mut self) -> Result<!, minimq::Error<Error>> {
+        core::future::poll_fn(|_| self.poll()).await
+    }
+
+    pub async fn subscribe(
+        &mut self,
+        topics: &[minimq::types::TopicFilter<'_>],
+        properties: &[minimq::Property<'_>],
+    ) -> Result<(), minimq::Error<Error>> {
+        if let Poll::Ready(v) = self.poll() {
+            return v.map(|_| ());
+        }
+
+        core::future::poll_fn(|_| {
+            if let Poll::Ready(v) = self.poll() {
+                return Poll::Ready(v.map(|_| ()));
+            }
+            match self.minimq().client().subscribe(topics, properties) {
+                Ok(_) => Poll::Ready(Ok(())),
+                Err(minimq::Error::NotReady) => {
+                    // todo: do we need to poll here?
+                    self.poll().map(|r| r.map(|_| ()))
+                }
+                Err(other) => Poll::Ready(Err(other)),
+            }
+        })
+        .await?;
+
+        core::future::poll_fn(|_| {
+            if let Poll::Ready(v) = self.poll() {
+                return Poll::Ready(v.map(|_| ()));
+            }
+            if self.minimq().client().subscriptions_pending() {
+                Poll::Pending
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        })
+        .await?;
+
+        Ok(())
     }
 }
 
@@ -128,10 +194,7 @@ fn poll(
 }
 
 #[define_opaque(NetLock)]
-pub async fn mqtt(
-    ctx: crate::app::mqtt_task::Context<'static>,
-    socket_handle: SocketHandle,
-) -> ! {
+pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: SocketHandle) -> ! {
     let storage = ctx.local.storage;
     let net = TokenProvider::new(ctx.local.token_place, ctx.shared.net);
     let conf = minimq::ConfigBuilder::new(
@@ -142,41 +205,28 @@ pub async fn mqtt(
         &mut storage.buffer[..],
     );
     let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
+    // todo: keepalive doesn't work
     let conf = conf.keepalive_interval(30_000);
-    let mqtt = Mqtt::new(socket_handle, conf, net, waker);
+    let mqtt = Mqtt::new(socket_handle, conf, net, waker, &mut storage.alloc);
     let mqtt = storage.mqtt.get_or_insert(mqtt);
 
-    let mut with_client = async |f: fn(&mut MqttClient) -> _| {
-        core::future::poll_fn(|_| {
-            mqtt.poll(); // ingress
-            match f(mqtt.minimq().client()) {
-                Err(minimq::Error::NotReady) => {
-                    mqtt.poll(); // egress
-                    Poll::Pending
-                }
-                other => Poll::Ready(other.unwrap()),
+    loop {
+        mqtt.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
+            .await
+            .unwrap();
+
+        defmt::info!("Subscribed to topics");
+
+        // For some reason, no error if I stop the broker
+        match mqtt.join().await {
+            Err(minimq::Error::Network(Error::ConnectError(ConnectError::ConnectionReset))) => {
+                defmt::info!("Failed to connect to broker, retrying...");
             }
-        })
-        .await
-    };
-
-    with_client(|client| client.subscribe(&["/rtic_mqtt/hello_world".into()], &[])).await;
-
-    with_client(|client| {
-        if client.subscriptions_pending() {
-            return Err(minimq::Error::NotReady);
+            Err(minimq::Error::Network(other)) => defmt::error!("Minimq Network error: {}", other),
+            // I want to see what kinds of errors it will generate
+            Err(other) => panic!("Minimq error: {:?}", other),
         }
-        Ok(())
-    })
-    .await;
-
-    defmt::info!("Subscribed to topics");
-
-    core::future::poll_fn(|_| {
-        mqtt.poll();
-        Poll::<!>::Pending
-    })
-    .await
+    }
 }
 
 mod waiter {
@@ -233,15 +283,34 @@ mod waiter {
 }
 
 impl EmbeddedNalAdapter {
-    pub const fn new(net: TokenProvider<NetLock>, handle: SocketHandle, waker: Waker) -> Self {
+    pub const fn new(
+        net: TokenProvider<NetLock>,
+        handle: SocketHandle,
+        alloc: &'static mut MqttAlocation,
+        waker: Waker,
+    ) -> Self {
+        let socket = Some(TcpSocket::new(net, handle));
+        let connect_future = Pin::static_mut(&mut alloc.connect_future_place);
+
         Self {
             last_connection: None,
             port_shift: core::num::Wrapping(0),
-            socket: Some(handle),
+            socket_handle: Some(handle),
             net,
             waker,
+            connect_future,
+            socket,
         }
     }
+
+    fn setup_wakers(&mut self, handle: SocketHandle) {
+        self.net.lock(|net| {
+            let socket = net.sockets.get_mut::<Socket>(handle);
+            socket.register_recv_waker(&self.waker);
+            socket.register_send_waker(&self.waker);
+        });
+    }
+
     fn with<R>(
         &mut self,
         handle: SocketHandle,
@@ -257,6 +326,27 @@ impl EmbeddedNalAdapter {
             ret
         })
     }
+
+    fn should_try_connect(&mut self) -> bool {
+        let now = Mono::now();
+
+        if let Some(last) = self.last_connection {
+            if let Some(diff) = now.checked_duration_since(last) {
+                if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
+                    self.last_connection = Some(now);
+                    let poll_at = last + RECONNECT_INTERVAL_MS.millis::<1, 1000>();
+
+                    // This is not async function and is not pinned, so let the
+                    // global state be our `Pin<&mut Self>`.
+                    waiter::setup_waiter(poll_at, &self.waker);
+
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
 }
 
 // fixme: when broker RST, client does not reconnect for some reason
@@ -267,121 +357,107 @@ impl TcpClientStack for EmbeddedNalAdapter {
     type Error = Error;
 
     fn socket(&mut self) -> Result<Self::TcpSocket, Self::Error> {
-        let socket = self.socket.take().ok_or(Error::SocketUsed)?;
+        let socket = self.socket_handle.take().ok_or(Error::SocketUsed)?;
         self.with(socket, |_, socket| socket.abort());
         Ok(socket)
     }
 
     // note: this path is called x3-x5 times for some reason
+    // #[define_opaque(ConnectFut)]
     fn connect(
         &mut self,
-        handle: &mut Self::TcpSocket,
+        _handle: &mut Self::TcpSocket,
         remote: core::net::SocketAddr,
-    ) -> embedded_nal::nb::Result<(), Self::Error> {
-        let now = Mono::now();
-        let waker = &self.waker;
-        defmt::trace!("Connecting poll: got {}", now.ticks());
-
-        let mut should_try_connect = true;
-        if let Some(last) = self.last_connection {
-            if let Some(diff) = now.checked_duration_since(last) {
-                if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
-                    should_try_connect = false;
-
-                    // This is not async function and is not pinned, so let the
-                    // global state be our `Pin<&mut Self>`.
-                    waiter::setup_waiter(last + RECONNECT_INTERVAL_MS.millis::<1, 1000>(), waker);
+    ) -> nb::Result<(), Self::Error> {
+        if let Some(mut fut) = self.connect_future.as_mut().as_pin_mut() {
+            let mut cx = Context::from_waker(&self.waker);
+            return match fut.as_mut().poll(&mut cx) {
+                Poll::Ready((socket, Ok(()))) => {
+                    self.socket = Some(socket);
+                    self.last_connection = Some(Mono::now());
+                    self.connect_future.set(None);
+                    Ok(())
                 }
-            }
+                Poll::Ready((socket, Err(e))) => {
+                    self.socket = Some(socket);
+                    self.connect_future.set(None);
+                    Err(nb::Error::Other(Error::ConnectError(e)))
+                }
+                Poll::Pending => Err(nb::Error::WouldBlock),
+            };
         }
-
-        let mut last_connection = self.last_connection;
 
         let port = MQTT_CLIENT_PORT + self.port_shift.0 as u16;
         self.port_shift += 1;
-        let res = self.with(*handle, |iface, socket| {
-            // note: this is in SynSent state for several seconds sometimes
-            if !socket.is_open() && should_try_connect {
-                last_connection = Some(now);
-                socket.connect(iface.context(), remote, port).expect(
-                    "Inspection of error conditions, they will only happen during development",
-                );
-            }
-            // We need to deal with close_wait stuff
-            // todo: why is it getting in close_wait state at the first place?
-            if socket.state() == smoltcp::socket::tcp::State::CloseWait {
-                socket.close()
-            }
-            if socket.state() == smoltcp::socket::tcp::State::Established {
-                Ok(())
-            } else {
-                Err(embedded_nal::nb::Error::<Self::Error>::WouldBlock)
-            }
-        });
 
-        self.last_connection = last_connection;
+        if self.should_try_connect() {
+            if let Some(socket) = self.socket.take() {
+                let fut = async move {
+                    let mut socket = socket;
+                    let res = socket.connect(remote, port).await;
+                    (socket, res)
+                };
 
-        res
+                // self.connect_future.set(Some(fut));
+                self.connect_future
+                    .set(Some(stackfuture::StackFuture::from(fut)));
+            }
+        }
+
+        Err(nb::Error::WouldBlock)
     }
 
     fn send(
         &mut self,
-        handle: &mut Self::TcpSocket,
+        _handle: &mut Self::TcpSocket,
         buffer: &[u8],
-    ) -> embedded_nal::nb::Result<usize, Self::Error> {
+    ) -> nb::Result<usize, Self::Error> {
         if buffer.len() == 0 {
             return Ok(0);
         }
 
-        self.with(*handle, |_, socket| {
-            if socket.state() == smoltcp::socket::tcp::State::Closed {
-                return Err(embedded_nal::nb::Error::Other(Error::PipeClosed));
+        if let Some(socket) = self.socket.as_mut() {
+            let fut = pin!(socket.write(buffer));
+            let mut ctx = Context::from_waker(&self.waker);
+            match fut.poll(&mut ctx) {
+                Poll::Ready(Ok(len)) => Ok(len),
+                Poll::Ready(Err(e)) => Err(nb::Error::Other(Error::SendError(e))),
+                Poll::Pending => Err(nb::Error::WouldBlock),
             }
-
-            if !socket.can_send() {
-                defmt::info!("Send Would Block");
-                return Err(embedded_nal::nb::Error::WouldBlock);
-            }
-
-            let len = socket
-                .send_slice(buffer)
-                .map_err(Error::SendError)
-                .map_err(embedded_nal::nb::Error::Other)?;
-
-            // Notify network stack that it is time to be polled
-            crate::NET_WAKER.wake_by_ref();
-
-            Ok(len)
-        })
+        } else {
+            Err(nb::Error::WouldBlock)
+        }
     }
 
     fn receive(
         &mut self,
-        handle: &mut Self::TcpSocket,
+        &mut handle: &mut Self::TcpSocket,
         buffer: &mut [u8],
-    ) -> embedded_nal::nb::Result<usize, Self::Error> {
-        self.with(*handle, |_, socket| {
-            if socket.state() == smoltcp::socket::tcp::State::Closed {
-                return Err(embedded_nal::nb::Error::Other(Error::PipeClosed));
+    ) -> nb::Result<usize, Self::Error> {
+        if buffer.len() == 0 {
+            return Ok(0);
+        }
+
+        if let Some(socket) = self.socket.as_mut() {
+            match {
+                let fut = pin!(socket.read(buffer));
+                fut.poll(&mut Context::from_waker(&self.waker))
+            } {
+                Poll::Ready(Ok(len)) => {
+                    self.setup_wakers(handle);
+                    Ok(len)
+                }
+                Poll::Ready(Err(e)) => Err(nb::Error::Other(Error::RecvError(e))),
+                Poll::Pending => Err(nb::Error::WouldBlock),
             }
-
-            if !socket.can_recv() {
-                defmt::trace!("Recv Would Block");
-                return Err(embedded_nal::nb::Error::WouldBlock);
-            }
-
-            let len = socket
-                .recv_slice(buffer)
-                .map_err(Error::RecvError)
-                .map_err(embedded_nal::nb::Error::Other)?;
-
-            Ok(len)
-        })
+        } else {
+            Err(nb::Error::WouldBlock)
+        }
     }
 
     fn close(&mut self, handle: Self::TcpSocket) -> Result<(), Self::Error> {
         self.with(handle, |_, socket| socket.close());
-        self.socket = Some(handle);
+        self.socket_handle = Some(handle);
         Ok(())
     }
 }

@@ -22,7 +22,6 @@ macro_rules! parse_ipv6 {
     }};
 }
 
-
 pub const CLOCK_HZ: u32 = 1_000;
 pub const SYS_TICK_HZ: u32 = 12_000_000;
 pub const MAC: [u8; 6] = iter::collect_const!(u8 =>
@@ -31,11 +30,13 @@ pub const MAC: [u8; 6] = iter::collect_const!(u8 =>
 );
 pub const IP_V4: IpAddress = parse_ipv4!(split_ip(env!("IP_V4")).0, IpAddress::v4);
 pub const IP_V4_NETMASK: u8 = split_ip(env!("IP_V4")).1;
-pub const IP_V4_GATEWAY: wire::Ipv4Address = parse_ipv4!(env!("IP_V4_GATEWAY"), wire::Ipv4Address::new);
+pub const IP_V4_GATEWAY: wire::Ipv4Address =
+    parse_ipv4!(env!("IP_V4_GATEWAY"), wire::Ipv4Address::new);
 
 pub const IP_V6: IpAddress = parse_ipv6!(split_ip(env!("IP_V6")).0, IpAddress::v6);
 pub const IP_V6_NETMASK: u8 = split_ip(env!("IP_V6")).1;
-pub const IP_V6_GATEWAY: wire::Ipv6Address = parse_ipv6!(env!("IP_V6_GATEWAY"), wire::Ipv6Address::new);
+pub const IP_V6_GATEWAY: wire::Ipv6Address =
+    parse_ipv6!(env!("IP_V6_GATEWAY"), wire::Ipv6Address::new);
 
 pub const MQTT_BROKER_IP: Ipv4Addr = parse_ipv4!(env!("MQTT_BROKER_IP"), Ipv4Addr::new);
 pub const MQTT_BROKER_PORT: u16 = parse_u16(env!("MQTT_BROKER_PORT"), 10, "Invalid MQTT port");
