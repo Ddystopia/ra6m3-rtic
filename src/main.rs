@@ -139,6 +139,7 @@ fn exit() -> ! {
 mod app {
     use super::*;
 
+    use futures_lite::future::yield_now;
     use rtic_sync::{
         channel::{Receiver, Sender},
         make_channel,
@@ -285,7 +286,7 @@ mod app {
 
             match (net, dev).lock(|net, dev| net.iface.poll(now, dev, &mut net.sockets)) {
                 smoltcp::iface::PollResult::None => break,
-                smoltcp::iface::PollResult::SocketStateChanged => continue,
+                smoltcp::iface::PollResult::SocketStateChanged => yield_now().await,
             };
         }
 
