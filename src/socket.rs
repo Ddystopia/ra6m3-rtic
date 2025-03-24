@@ -99,8 +99,7 @@ impl<M: NetMutex> SocketInner<M> {
         self.net.lock(|net| {
             let socket = net.sockets.get_mut::<tcp::Socket>(self.handle);
             let res = f(socket, &mut net.iface);
-            // fixme: change to waker maybe? To be more generic
-            crate::app::poll_network::spawn().ok();
+            crate::NET_WAKER.wake_by_ref();
             res
         })
     }

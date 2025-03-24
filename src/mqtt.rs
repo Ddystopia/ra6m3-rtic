@@ -349,7 +349,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
                 .map_err(embedded_nal::nb::Error::Other)?;
 
             // Notify network stack that it is time to be polled
-            crate::app::poll_network::spawn().ok();
+            crate::NET_WAKER.wake_by_ref();
 
             Ok(len)
         })

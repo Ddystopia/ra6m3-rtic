@@ -23,10 +23,10 @@ mod net_device;
 mod conf;
 mod http;
 mod mqtt;
-mod socket;
 #[cfg(feature = "ra6m3")]
 mod net_device;
 mod poll_share;
+mod socket;
 mod socket_storage;
 mod util;
 
@@ -54,6 +54,8 @@ defmt::timestamp!("{=usize}", {
 
 // fixme: u32 overflow, as it is in milliseconds
 systick_monotonic!(Mono, CLOCK_HZ);
+
+const NET_WAKER: core::task::Waker = util::waker(|| _ = app::poll_network::spawn().ok());
 
 pub struct Net {
     iface: Interface,
@@ -141,13 +143,6 @@ mod app {
         channel::{Receiver, Sender},
         make_channel,
     };
-
-    pub fn trigger_network_poll() {
-        #[cfg(feature = "qemu")]
-        rtic::pend(lm3s6965::Interrupt::ETHERNET);
-        #[cfg(feature = "ra6m3")]
-        todo!();
-    }
 
     #[shared]
     struct Shared {
@@ -240,7 +235,7 @@ mod app {
     fn ethernet_isr(mut ctx: ethernet_isr::Context) {
         let cause = ctx.shared.device.lock(net_device::isr_handler);
         if cause == Some(net_device::InterruptCause::Receive) {
-            poll_network::spawn().ok();
+            NET_WAKER.wake_by_ref();
         }
     }
 
@@ -268,7 +263,7 @@ mod app {
             let receiver = async { Event::NewTimeout(receiver.recv().await.unwrap()) };
             match futures_lite::future::or(race_delay, receiver).await {
                 Event::Timeout(()) => {
-                    poll_network::spawn().ok();
+                    NET_WAKER.wake_by_ref();
                     delay = None
                 }
                 Event::NewTimeout(at) => {

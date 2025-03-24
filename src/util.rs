@@ -1,8 +1,7 @@
-#![expect(dead_code)]
-pub fn waker(f: fn()) -> core::task::Waker {
-    use core::mem::transmute;
-    use core::task::{RawWaker, RawWakerVTable, Waker};
+use core::mem::transmute;
+use core::task::{RawWaker, RawWakerVTable, Waker};
 
+pub const fn waker(f: fn()) -> Waker {
     static VTABLE: RawWakerVTable = unsafe {
         RawWakerVTable::new(
             |this| RawWaker::new(this, &VTABLE),
@@ -11,8 +10,7 @@ pub fn waker(f: fn()) -> core::task::Waker {
             |_| {},
         )
     };
-    unsafe {
-        let raw = RawWaker::new(f as *const (), &VTABLE);
-        Waker::from_raw(raw)
-    }
+    let raw = RawWaker::new(f as *const (), &VTABLE);
+
+    unsafe { Waker::from_raw(raw) }
 }
