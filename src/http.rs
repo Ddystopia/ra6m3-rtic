@@ -5,8 +5,7 @@ use embedded_tls::{TlsConfig, TlsContext, UnsecureProvider};
 #[cfg(feature = "tls")]
 use tls_socket::{Rng, TlsSocket};
 
-use make_app::AppRouter;
-use picoserve::Config;
+use picoserve::{Config, response::File, routing::get_service};
 use rtic_monotonics::fugit::ExtU32;
 use smoltcp::{iface::SocketHandle, socket::tcp};
 use socket::{Socket, Timer};
@@ -20,7 +19,8 @@ mod socket;
 mod tls_socket;
 
 pub type AppState = ();
-pub use crate::app::http_type_inference::NetLock;
+pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
+pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
 
 pub struct Storage {
     pub app: Option<picoserve::Router<AppRouter, AppState>>,
@@ -40,12 +40,11 @@ impl Storage {
     }
 }
 
-pub async fn http(
-    net: TokenProvider<NetLock>,
-    socket_handle: SocketHandle,
-    storage: &'static mut Storage,
-) -> ! {
-    let app = storage.app.get_or_insert(make_app::make_app());
+#[define_opaque(NetLock)]
+pub async fn http(ctx: crate::app::http_task::Context<'static>, socket_handle: SocketHandle) -> ! {
+    let net = TokenProvider::new(ctx.local.token_place, ctx.shared.net);
+    let storage = ctx.local.storage;
+    let app = storage.app.get_or_insert(make_app());
 
     loop {
         net.lock(|net| {
@@ -107,11 +106,8 @@ async fn handle_connection<S, E>(
     }
 }
 
-mod make_app {
-    use picoserve::{response::File, routing::get_service};
-
-    use super::AppState;
-
+#[define_opaque(AppRouter)]
+pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
     const HELLO_WORLD: &str = r#"<!DOCTYPE html>
 <html>
 <head>
@@ -124,22 +120,5 @@ mod make_app {
 </body>
 </html>
 "#;
-
-    pub trait Infer {
-        type AppRouter: picoserve::routing::PathRouter<AppState>;
-        fn make_app() -> picoserve::Router<Self::AppRouter, AppState>;
-    }
-
-    impl Infer for () {
-        type AppRouter = impl picoserve::routing::PathRouter<AppState>;
-
-        fn make_app() -> picoserve::Router<AppRouter, AppState> {
-            picoserve::Router::new().route("/", get_service(File::html(HELLO_WORLD)))
-        }
-    }
-    pub type AppRouter = <() as Infer>::AppRouter;
-
-    pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
-        <() as Infer>::make_app()
-    }
+    picoserve::Router::new().route("/", get_service(File::html(HELLO_WORLD)))
 }

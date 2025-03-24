@@ -21,7 +21,7 @@ use crate::{Mono, conf::CLOCK_HZ, socket_storage::MQTT_BUFFER_SIZE};
 const MQTT_CLIENT_PORT: u16 = 58766;
 const RECONNECT_INTERVAL_MS: u32 = 1_000;
 
-pub use crate::app::mqtt_type_inference::NetLock;
+pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
 
 pub struct Mqtt {
     pub socket: SocketHandle,
@@ -127,11 +127,13 @@ fn poll(
     client.publish(publication).unwrap();
 }
 
+#[define_opaque(NetLock)]
 pub async fn mqtt(
-    net: TokenProvider<NetLock>,
+    ctx: crate::app::mqtt_task::Context<'static>,
     socket_handle: SocketHandle,
-    storage: &'static mut Storage,
 ) -> ! {
+    let storage = ctx.local.storage;
+    let net = TokenProvider::new(ctx.local.token_place, ctx.shared.net);
     let conf = minimq::ConfigBuilder::new(
         Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
             MQTT_BROKER_IP,
