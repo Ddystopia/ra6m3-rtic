@@ -120,6 +120,7 @@ fn init_network(
     (Net { iface, sockets }, device, [mqtt, http])
 }
 
+#[expect(dead_code)]
 fn exit() -> ! {
     use cortex_m_semihosting::debug;
 
@@ -188,7 +189,7 @@ mod app {
     }
 
     #[task(priority = 3)]
-    async fn waiter(_: waiter::Context) {
+    async fn waiter(_: waiter::Context) -> ! {
         let mut next = Mono::now();
 
         defmt::info!("Waiter task: 1 {}", Mono::now().ticks());
@@ -203,9 +204,7 @@ mod app {
 
         defmt::info!("Waiter task: 3 {}", Mono::now().ticks());
 
-        core::future::pending::<()>().await;
-
-        exit();
+        core::future::pending().await
     }
 
     #[task(
