@@ -18,11 +18,12 @@ rustflags = [
   # "-Z", "fmt-debug=none",
 ]
 
-[unstable]
-build-std = ["core", "panic_abort"]
-build-std-features = ["optimize_for_size", "panic_immediate_abort"]
+# [unstable]
+# build-std = ["core", "panic_abort"]
+# build-std-features = ["optimize_for_size", "panic_immediate_abort"]
 
 [env]
+CC = "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
 DEFMT_LOG = "debug"
 MAC = "fe:e3:a9:97:ad:ab"
 IP_V4 = "192.168.69.100/24"
