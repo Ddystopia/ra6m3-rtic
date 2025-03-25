@@ -7,21 +7,21 @@ use core::{
 use crate::{
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT},
     poll_share::TokenProvider,
-    socket::{ConnectError, TcpSocket},
+    socket::{self, TcpSocket},
 };
 use embedded_nal::{TcpClientStack, TcpError, nb};
 use minimq::{ConfigBuilder, Publication};
-use rtic_monotonics::{Monotonic, fugit::ExtU32};
-use smoltcp::{
-    iface::{Interface, SocketHandle},
-    socket::tcp::Socket,
+use rtic_monotonics::{
+    Monotonic,
+    fugit::{self, ExtU32},
 };
+use smoltcp::{iface::SocketHandle, socket::tcp::Socket};
 
 use crate::fugit::Instant;
 use crate::{Mono, conf::CLOCK_HZ, socket_storage::MQTT_BUFFER_SIZE};
 
 const MQTT_CLIENT_PORT: u16 = 58737;
-const RECONNECT_INTERVAL_MS: u32 = 1_000;
+const RECONNECT_INTERVAL_MS: u32 = 2_000;
 
 pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
 
@@ -47,9 +47,9 @@ pub struct Storage {
     pub alloc: MqttAlocation,
 }
 
-// type ConnectFut = impl Future<Output = (TcpSocket<NetLock>, Result<(), ConnectError>)>;
+// type ConnectFut = impl Future<Output = (TcpSocket<NetLock>, Result<(), socket::ConnectError>)>;
 type ConnectFut =
-    stackfuture::StackFuture<'static, (TcpSocket<NetLock>, Result<(), ConnectError>), 120>;
+    stackfuture::StackFuture<'static, (TcpSocket<NetLock>, Result<(), socket::ConnectError>), 120>;
 
 pub struct EmbeddedNalAdapter {
     last_connection: Option<Instant<u32, 1, 1000>>,
@@ -57,17 +57,18 @@ pub struct EmbeddedNalAdapter {
     socket_handle: Option<SocketHandle>,
     net: TokenProvider<NetLock>,
     waker: Waker,
+    pending_close: bool,
     connect_future: Pin<&'static mut Option<ConnectFut>>,
     socket: Option<TcpSocket<NetLock>>,
 }
 
 #[derive(PartialEq, Debug, defmt::Format)]
-pub enum Error {
+pub enum NetError {
     SocketUsed,
     PipeClosed,
-    ConnectError(crate::socket::ConnectError),
-    SendError(crate::socket::Error),
-    RecvError(crate::socket::Error),
+    ConnectError(socket::ConnectError),
+    SendError(socket::Error),
+    RecvError(socket::Error),
 }
 
 impl embedded_time::Clock for Mono {
@@ -129,22 +130,32 @@ impl Mqtt {
         })
     }
 
-    pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<Error>>> {
+    pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<NetError>>> {
         match self.minimq().poll(poll).map(|_| ()) {
             Ok(()) | Err(minimq::Error::NotReady) => Poll::Pending,
             Err(other) => Poll::Ready(Err(other)),
         }
     }
 
-    pub async fn join(&mut self) -> Result<!, minimq::Error<Error>> {
-        core::future::poll_fn(|_| self.poll()).await
+    pub async fn join(
+        &mut self,
+        keepalive_interval: fugit::Duration<u32, 1, 1000>,
+    ) -> Result<!, minimq::Error<NetError>> {
+        // fixme: it should work but minimq still doesn't doesnt send keepalive packets
+        loop {
+            let poller = core::future::poll_fn(|_| self.poll());
+            match Mono::timeout_after(keepalive_interval / 3, poller).await {
+                Ok(Err(err)) => return Err(err),
+                Err(rtic_monotonics::TimeoutError) => continue,
+            }
+        }
     }
 
     pub async fn subscribe(
         &mut self,
         topics: &[minimq::types::TopicFilter<'_>],
         properties: &[minimq::Property<'_>],
-    ) -> Result<(), minimq::Error<Error>> {
+    ) -> Result<(), minimq::Error<NetError>> {
         if let Poll::Ready(v) = self.poll() {
             return v.map(|_| ());
         }
@@ -204,26 +215,28 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
         ))),
         &mut storage.buffer[..],
     );
+    let keepalive_interval = 5.secs();
     let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
-    // todo: keepalive doesn't work
-    let conf = conf.keepalive_interval(30_000);
+    let conf = conf.keepalive_interval(keepalive_interval.to_secs() as u16);
     let mqtt = Mqtt::new(socket_handle, conf, net, waker, &mut storage.alloc);
     let mqtt = storage.mqtt.get_or_insert(mqtt);
 
+    // todo: sometimes qemu does not respond
     loop {
-        mqtt.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
-            .await
-            .unwrap();
-
-        defmt::info!("Subscribed to topics");
-
-        // For some reason, no error if I stop the broker
-        match mqtt.join().await {
-            Err(minimq::Error::Network(Error::ConnectError(ConnectError::ConnectionReset))) => {
+        match try {
+            mqtt.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
+                .await?;
+            defmt::info!("Subscribed to topics");
+            mqtt.join(keepalive_interval).await?
+        } {
+            Err(minimq::Error::Network(NetError::ConnectError(
+                socket::ConnectError::ConnectionReset,
+            ))) => {
                 defmt::info!("Failed to connect to broker, retrying...");
             }
             Err(minimq::Error::Network(other)) => defmt::error!("Minimq Network error: {}", other),
             // I want to see what kinds of errors it will generate
+            Err(minimq::Error::SessionReset) => defmt::warn!("Mqtt Session Reset"),
             Err(other) => panic!("Minimq error: {:?}", other),
         }
     }
@@ -234,31 +247,30 @@ mod waiter {
     use core::{
         future::Future,
         pin::Pin,
-        sync::Exclusive,
         task::{Context, Poll, Waker},
     };
     use rtic_monotonics::{
         Monotonic,
         fugit::{ExtU32, Instant},
     };
-    use stackfuture::StackFuture;
     use static_cell::StaticCell;
 
     use crate::Mono;
 
-    pub type Waiter = Exclusive<StackFuture<'static, (), 120>>;
+    pub type Waiter = impl Future<Output = ()> + 'static;
 
     static WAITER_PLACE: StaticCell<Waiter> = StaticCell::new();
     // Something like `AtomicPtr` would be enough, but I don't want to use unsafe code
     static WAITER: AtomicRefCell<Option<Pin<&'static mut Waiter>>> = AtomicRefCell::new(None);
 
+    #[define_opaque(Waiter)]
     pub fn setup_waiter(mut at: Instant<u32, 1, 1000>, waker: &Waker) {
         let mut cx = Context::from_waker(waker);
 
         let mut pin_guard = WAITER.borrow_mut();
 
         loop {
-            let fut = Exclusive::new(StackFuture::from(Mono::delay_until(at)));
+            let fut = Mono::delay_until(at);
 
             match match pin_guard.as_mut() {
                 Some(place) => {
@@ -296,6 +308,7 @@ impl EmbeddedNalAdapter {
             last_connection: None,
             port_shift: core::num::Wrapping(0),
             socket_handle: Some(handle),
+            pending_close: false,
             net,
             waker,
             connect_future,
@@ -309,22 +322,6 @@ impl EmbeddedNalAdapter {
             socket.register_recv_waker(&self.waker);
             socket.register_send_waker(&self.waker);
         });
-    }
-
-    fn with<R>(
-        &mut self,
-        handle: SocketHandle,
-        f: impl FnOnce(&mut Interface, &mut Socket<'_>) -> R,
-    ) -> R {
-        self.net.lock(|net| {
-            let socket = net.sockets.get_mut::<Socket>(handle);
-            let ret = f(&mut net.iface, &mut *socket);
-
-            socket.register_recv_waker(&self.waker);
-            socket.register_send_waker(&self.waker);
-
-            ret
-        })
     }
 
     fn should_try_connect(&mut self) -> bool {
@@ -349,17 +346,13 @@ impl EmbeddedNalAdapter {
     }
 }
 
-// fixme: when broker RST, client does not reconnect for some reason
-
 impl TcpClientStack for EmbeddedNalAdapter {
     type TcpSocket = SocketHandle;
 
-    type Error = Error;
+    type Error = NetError;
 
     fn socket(&mut self) -> Result<Self::TcpSocket, Self::Error> {
-        let socket = self.socket_handle.take().ok_or(Error::SocketUsed)?;
-        self.with(socket, |_, socket| socket.abort());
-        Ok(socket)
+        Ok(self.socket_handle.take().ok_or(NetError::SocketUsed)?)
     }
 
     // note: this path is called x3-x5 times for some reason
@@ -372,16 +365,12 @@ impl TcpClientStack for EmbeddedNalAdapter {
         if let Some(mut fut) = self.connect_future.as_mut().as_pin_mut() {
             let mut cx = Context::from_waker(&self.waker);
             return match fut.as_mut().poll(&mut cx) {
-                Poll::Ready((socket, Ok(()))) => {
+                Poll::Ready((socket, v)) => {
                     self.socket = Some(socket);
                     self.last_connection = Some(Mono::now());
                     self.connect_future.set(None);
-                    Ok(())
-                }
-                Poll::Ready((socket, Err(e))) => {
-                    self.socket = Some(socket);
-                    self.connect_future.set(None);
-                    Err(nb::Error::Other(Error::ConnectError(e)))
+                    self.pending_close = false;
+                    v.map_err(NetError::ConnectError).map_err(nb::Error::Other)
                 }
                 Poll::Pending => Err(nb::Error::WouldBlock),
             };
@@ -392,8 +381,15 @@ impl TcpClientStack for EmbeddedNalAdapter {
 
         if self.should_try_connect() {
             if let Some(socket) = self.socket.take() {
+                let pending_close = self.pending_close;
                 let fut = async move {
                     let mut socket = socket;
+
+                    if pending_close {
+                        socket.disconnect().await;
+                    }
+
+                    // https://docs.rs/embedded-tls/latest/embedded_tls/struct.TlsConnection.html#method.open
                     let res = socket.connect(remote, port).await;
                     (socket, res)
                 };
@@ -416,12 +412,15 @@ impl TcpClientStack for EmbeddedNalAdapter {
             return Ok(0);
         }
 
+        // cannot send during connect
         if let Some(socket) = self.socket.as_mut() {
+            // https://docs.rs/embedded-tls/latest/embedded_tls/struct.TlsConnection.html#method.write
+            // https://docs.rs/embedded-tls/latest/embedded_tls/struct.TlsConnection.html#method.flush
             let fut = pin!(socket.write(buffer));
             let mut ctx = Context::from_waker(&self.waker);
             match fut.poll(&mut ctx) {
                 Poll::Ready(Ok(len)) => Ok(len),
-                Poll::Ready(Err(e)) => Err(nb::Error::Other(Error::SendError(e))),
+                Poll::Ready(Err(e)) => Err(nb::Error::Other(NetError::SendError(e))),
                 Poll::Pending => Err(nb::Error::WouldBlock),
             }
         } else {
@@ -438,16 +437,19 @@ impl TcpClientStack for EmbeddedNalAdapter {
             return Ok(0);
         }
 
+        // cannot receive during connect
         if let Some(socket) = self.socket.as_mut() {
             match {
+                // https://docs.rs/embedded-tls/latest/embedded_tls/struct.TlsConnection.html#method.read
                 let fut = pin!(socket.read(buffer));
                 fut.poll(&mut Context::from_waker(&self.waker))
             } {
+                Poll::Ready(Ok(0)) => Err(nb::Error::Other(NetError::PipeClosed)),
                 Poll::Ready(Ok(len)) => {
                     self.setup_wakers(handle);
                     Ok(len)
                 }
-                Poll::Ready(Err(e)) => Err(nb::Error::Other(Error::RecvError(e))),
+                Poll::Ready(Err(e)) => Err(nb::Error::Other(NetError::RecvError(e))),
                 Poll::Pending => Err(nb::Error::WouldBlock),
             }
         } else {
@@ -455,19 +457,23 @@ impl TcpClientStack for EmbeddedNalAdapter {
         }
     }
 
+    // todo: this function is not called, thus minimq state machine does not work well
     fn close(&mut self, handle: Self::TcpSocket) -> Result<(), Self::Error> {
-        self.with(handle, |_, socket| socket.close());
+        defmt::info!("Closing socket");
+        self.pending_close = true;
         self.socket_handle = Some(handle);
         Ok(())
     }
 }
 
-impl TcpError for Error {
+impl TcpError for NetError {
     fn kind(&self) -> embedded_nal::TcpErrorKind {
-        if *self == Error::PipeClosed {
-            return embedded_nal::TcpErrorKind::PipeClosed;
+        match *self {
+            Self::SocketUsed => embedded_nal::TcpErrorKind::Other,
+            Self::PipeClosed
+            | Self::SendError(socket::Error::ConnectionReset)
+            | Self::RecvError(socket::Error::ConnectionReset)
+            | Self::ConnectError(_) => embedded_nal::TcpErrorKind::PipeClosed,
         }
-
-        embedded_nal::TcpErrorKind::Other
     }
 }
