@@ -621,6 +621,10 @@ impl<M: NetMutex> TcpSocket<M> {
         self.io.with_mut(|s, _| s.close())
     }
 
+    pub fn is_open(&self) -> bool {
+        self.io.with(|s, _| s.is_open())
+    }
+
     pub async fn disconnect(&mut self) {
         self.io.with_mut(|s, _| s.close());
         poll_fn(|cx| {
@@ -632,10 +636,6 @@ impl<M: NetMutex> TcpSocket<M> {
             }
         })
         .await
-    }
-
-    pub fn is_open(&self) -> bool {
-        self.io.with(|s, _| s.is_open())
     }
 
     /// Forcibly close the socket.

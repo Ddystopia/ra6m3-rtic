@@ -1,32 +1,3 @@
-/*
-TLS:
-
-#[cfg(feature = "tls")]
-use embedded_tls::{TlsConfig, TlsContext, UnsecureProvider};
-#[cfg(feature = "tls")]
-use tls_socket::{Rng, TlsSocket};
-
-// const TLS_TX_SIZE: usize = 16_640;
-// const TLS_RX_SIZE: usize = 16_640;
-const TLS_TX_SIZE: usize = 13_640;
-const TLS_RX_SIZE: usize = 16_640;
-
-    pub tls_tx: [u8; TLS_TX_SIZE],
-    pub tls_rx: [u8; TLS_RX_SIZE],
-
-#[cfg(feature = "tls")]
-let socket = {
-    let tls_config = TlsConfig::new().with_server_name("example.com");
-    let mut socket = TlsSocket::new(socket, &mut storage.tls_rx, &mut storage.tls_tx);
-    let mut rng = Rng;
-    let tls_ctx = TlsContext::new(&tls_config, UnsecureProvider::new(&mut rng));
-    socket.open(tls_ctx).await.unwrap();
-
-    socket
-};
-
-*/
-
 use picoserve::{Config, response::File, routing::get_service};
 use rtic_monotonics::fugit::ExtU32;
 use smoltcp::iface::SocketHandle;
