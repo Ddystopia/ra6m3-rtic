@@ -52,7 +52,7 @@ type ConnectFut =
     stackfuture::StackFuture<'static, (TcpSocket<NetLock>, Result<(), socket::ConnectError>), 120>;
 
 pub struct EmbeddedNalAdapter {
-    last_connection: Option<Instant<u32, 1, 1000>>,
+    last_connection_attempt: Option<Instant<u32, 1, 1000>>,
     port_shift: core::num::Wrapping<u8>,
     socket_handle: Option<SocketHandle>,
     net: TokenProvider<NetLock>,
@@ -242,6 +242,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     }
 }
 
+// todo: when tait would be better, store waiter in the allocation, where `ConnectFut` is stored.
 mod waiter {
     use atomic_refcell::AtomicRefCell;
     use core::{
@@ -305,7 +306,7 @@ impl EmbeddedNalAdapter {
         let connect_future = Pin::static_mut(&mut alloc.connect_future_place);
 
         Self {
-            last_connection: None,
+            last_connection_attempt: None,
             port_shift: core::num::Wrapping(0),
             socket_handle: Some(handle),
             pending_close: false,
@@ -327,10 +328,10 @@ impl EmbeddedNalAdapter {
     fn should_try_connect(&mut self) -> bool {
         let now = Mono::now();
 
-        if let Some(last) = self.last_connection {
+        if let Some(last) = self.last_connection_attempt {
             if let Some(diff) = now.checked_duration_since(last) {
                 if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
-                    self.last_connection = Some(now);
+                    self.last_connection_attempt = Some(now);
                     let poll_at = last + RECONNECT_INTERVAL_MS.millis::<1, 1000>();
 
                     // This is not async function and is not pinned, so let the
@@ -367,7 +368,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
             return match fut.as_mut().poll(&mut cx) {
                 Poll::Ready((socket, v)) => {
                     self.socket = Some(socket);
-                    self.last_connection = Some(Mono::now());
+                    self.last_connection_attempt = Some(Mono::now());
                     self.connect_future.set(None);
                     self.pending_close = false;
                     v.map_err(NetError::ConnectError).map_err(nb::Error::Other)
