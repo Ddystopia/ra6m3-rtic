@@ -1,3 +1,5 @@
+// https://github.com/nghiaducnt/LearningRIOT/blob/2019.01-my/cpu/cc2538/stellaris_ether/ethernet.c
+
 use bare_metal::CriticalSection;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
