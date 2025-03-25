@@ -621,6 +621,23 @@ impl<M: NetMutex> TcpSocket<M> {
         self.io.with_mut(|s, _| s.close())
     }
 
+    pub async fn disconnect(&mut self) {
+        self.io.with_mut(|s, _| s.close());
+        poll_fn(|cx| {
+            if self.io.with(|s, _| s.is_open()) {
+                self.io.with_mut(|s, _| s.register_recv_waker(cx.waker()));
+                Poll::Pending
+            } else {
+                Poll::Ready(())
+            }
+        })
+        .await
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.io.with(|s, _| s.is_open())
+    }
+
     /// Forcibly close the socket.
     ///
     /// This instantly closes both the read and write halves of the socket. Any pending data
