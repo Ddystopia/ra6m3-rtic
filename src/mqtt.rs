@@ -14,6 +14,8 @@ use rtic_monotonics::{
 use smoltcp::iface::SocketHandle;
 
 mod adapter;
+#[cfg(feature = "tls")]
+mod tls_socket;
 
 use crate::{Mono, socket_storage::MQTT_BUFFER_SIZE};
 
@@ -203,8 +205,9 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
             }
             Err(minimq::Error::Network(other)) => defmt::error!("Minimq Network error: {}", other),
             Err(minimq::Error::SessionReset) => defmt::warn!("Mqtt Session Reset"),
-            // I want to see what kinds of errors it will generate
-            Err(other) => panic!("Minimq error: {:?}", other),
+            Err(minimq::Error::NotReady) => unreachable!(),
+            // `minimq::Error` is non-exhaustive + other variants are dead code in 0.10.0
+            Err(_other) => defmt::error!("Unknown mqtt error"),
         }
     }
 }
