@@ -253,7 +253,6 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     let mqtt = Mqtt::new(socket_handle, conf, net, waker, &mut storage.alloc);
     let mqtt = storage.mqtt.get_or_insert(mqtt);
 
-    // todo: sometimes qemu does not respond
     loop {
         match try {
             mqtt.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
@@ -490,7 +489,6 @@ impl TcpClientStack for EmbeddedNalAdapter {
         }
     }
 
-    // todo: this function is not called, thus minimq state machine does not work well
     fn close(&mut self, handle: Self::TcpSocket) -> Result<(), Self::Error> {
         defmt::info!("Closing socket");
         self.pending_close = true;
