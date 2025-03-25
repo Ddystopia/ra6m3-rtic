@@ -267,7 +267,7 @@ mod app {
                     delay = None
                 }
                 Event::NewTimeout(at) => {
-                    let next = fugit::Instant::<u32, 1, 1000>::from_ticks(at.millis() as u32);
+                    let next = fugit::Instant::<u32, 1, 1000>::from_ticks(at.total_millis() as u32);
                     delay = Some(Mono::delay_until(next));
                 }
             }
@@ -279,7 +279,6 @@ mod app {
         let net = &mut ctx.shared.net;
         let dev = &mut ctx.shared.device;
 
-        // todo: somewhat a lot of polls...
         loop {
             let (net, dev) = (&mut *net, &mut *dev);
             let now = smol_now();
