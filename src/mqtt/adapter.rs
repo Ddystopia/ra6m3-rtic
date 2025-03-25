@@ -39,7 +39,10 @@ use core::{
 };
 
 use embedded_nal::{TcpClientStack, TcpError, nb};
-use rtic_monotonics::{fugit::{ExtU32, Instant}, Monotonic};
+use rtic_monotonics::{
+    Monotonic,
+    fugit::{ExtU32, Instant},
+};
 use smoltcp::{iface::SocketHandle, socket::tcp};
 
 use crate::{
@@ -54,14 +57,16 @@ use super::NetLock;
 const MQTT_CLIENT_PORT: u16 = 58737;
 const RECONNECT_INTERVAL_MS: u32 = 2_000;
 
-// pub type ConnectFut = impl Future<Output = (TcpSocket<NetLock>, Result<(), socket::ConnectError>)>;
-pub type ConnectFut =
+// type ConnectFut = impl Future<Output = (TcpSocket<NetLock>, Result<(), socket::ConnectError>)>;
+type ConnectFut =
     stackfuture::StackFuture<'static, (TcpSocket<NetLock>, Result<(), socket::ConnectError>), 120>;
+pub type WaiterFut = impl Future<Output = ()> + 'static;
 
 pub struct Broker(pub SocketAddr);
 
 pub struct MqttAlocation {
     connect_future_place: Option<ConnectFut>,
+    waiter_future_place: Option<WaiterFut>,
 }
 
 pub struct EmbeddedNalAdapter {
@@ -72,6 +77,7 @@ pub struct EmbeddedNalAdapter {
     waker: Waker,
     pending_close: bool,
     connect_future: Pin<&'static mut Option<ConnectFut>>,
+    waiter_future: Pin<&'static mut Option<WaiterFut>>,
     socket: Option<TcpSocket<NetLock>>,
 }
 
@@ -114,6 +120,7 @@ impl EmbeddedNalAdapter {
     ) -> Self {
         let socket = Some(TcpSocket::new(net, handle));
         let connect_future = Pin::static_mut(&mut alloc.connect_future_place);
+        let waiter_future = Pin::static_mut(&mut alloc.waiter_future_place);
 
         Self {
             last_connection_attempt: None,
@@ -123,6 +130,7 @@ impl EmbeddedNalAdapter {
             net,
             waker,
             connect_future,
+            waiter_future,
             socket,
         }
     }
@@ -146,7 +154,7 @@ impl EmbeddedNalAdapter {
 
                     // This is not async function and is not pinned, so let the
                     // global state be our `Pin<&mut Self>`.
-                    waiter::setup_waiter(poll_at, &self.waker);
+                    setup_waiter(poll_at, &self.waker, &mut self.waiter_future);
 
                     return false;
                 }
@@ -292,58 +300,37 @@ impl MqttAlocation {
     pub const fn new() -> Self {
         Self {
             connect_future_place: None,
+            waiter_future_place: None,
         }
     }
 }
 
-// todo: when tait would be better, store waiter in the allocation, where `ConnectFut` is stored.
-mod waiter {
-    use atomic_refcell::AtomicRefCell;
-    use core::{
-        future::Future,
-        pin::Pin,
-        task::{Context, Poll, Waker},
-    };
-    use rtic_monotonics::{
-        Monotonic,
-        fugit::{ExtU32, Instant},
-    };
-    use static_cell::StaticCell;
+#[define_opaque(WaiterFut)]
+pub fn setup_waiter(
+    mut at: Instant<u32, 1, 1000>,
+    waker: &Waker,
+    place: &mut Pin<&'static mut Option<WaiterFut>>,
+) {
+    let mut cx = Context::from_waker(waker);
 
-    use crate::Mono;
+    loop {
+        let fut = Mono::delay_until(at);
 
-    pub type Waiter = impl Future<Output = ()> + 'static;
-
-    static WAITER_PLACE: StaticCell<Waiter> = StaticCell::new();
-    // Something like `AtomicPtr` would be enough, but I don't want to use unsafe code
-    static WAITER: AtomicRefCell<Option<Pin<&'static mut Waiter>>> = AtomicRefCell::new(None);
-
-    #[define_opaque(Waiter)]
-    pub fn setup_waiter(mut at: Instant<u32, 1, 1000>, waker: &Waker) {
-        let mut cx = Context::from_waker(waker);
-
-        let mut pin_guard = WAITER.borrow_mut();
-
-        loop {
-            let fut = Mono::delay_until(at);
-
-            match match pin_guard.as_mut() {
-                Some(place) => {
-                    place.set(fut);
-                    place.as_mut().poll(&mut cx)
-                }
-                None => {
-                    let mut place = Pin::static_mut(WAITER_PLACE.init(fut));
-                    let poll = place.as_mut().poll(&mut cx);
-                    pin_guard.replace(place);
-                    poll
-                }
-            } {
-                Poll::Pending => return,
-                Poll::Ready(()) => {
-                    at += 1000.millis();
-                    continue;
-                }
+        match match place.as_mut().as_pin_mut() {
+            Some(mut place) => {
+                place.set(fut);
+                place.as_mut().poll(&mut cx)
+            }
+            None => {
+                place.set(Some(fut));
+                place.as_mut().as_pin_mut().unwrap().poll(&mut cx)
+            }
+        } {
+            Poll::Pending => return,
+            Poll::Ready(()) => {
+                place.set(None);
+                at += 1000.millis();
+                continue;
             }
         }
     }
