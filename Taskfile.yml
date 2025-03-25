@@ -82,6 +82,3 @@ tasks:
         -kernel target/{{.TARGET}}/{{.PROFILE}}/project
         -gdb tcp::1234
         | defmt-print -v -e target/{{.TARGET}}/{{.PROFILE}}/project
-      # - task: remove-tap
-
-
