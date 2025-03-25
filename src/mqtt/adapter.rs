@@ -181,6 +181,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
         _handle: &mut Self::TcpSocket,
         remote: core::net::SocketAddr,
     ) -> nb::Result<(), Self::Error> {
+        defmt::info!("Connecting to {:?}", remote);
         if let Some(mut fut) = self.connect_future.as_mut().as_pin_mut() {
             let mut cx = Context::from_waker(&self.waker);
             return match fut.as_mut().poll(&mut cx) {
