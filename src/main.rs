@@ -1,19 +1,9 @@
 #![no_main]
 #![no_std]
 #![feature(never_type)]
-#![feature(exclusive_wrapper)]
+#![feature(try_blocks)]
 #![feature(type_alias_impl_trait)]
 
-/**
-
-https://github.com/nghiaducnt/LearningRIOT/blob/2019.01-my/cpu/cc2538/stellaris_ether/ethernet.c
-
-todo:
-- runnable on ra6m3
-- http server
-- tls v3
-- real time measurements
-*/
 #[cfg(feature = "qemu")]
 mod defmt_semihosting;
 #[cfg(feature = "qemu")]
@@ -134,13 +124,12 @@ fn exit() -> ! {
 #[rtic::app(
   device = lm3s6965,
   // device = ra6m3,
-  dispatchers = [GPIOA, GPIOB /*, GPIOC, GPIOD, GPIOE */],
+  dispatchers = [GPIOA, GPIOB, /* GPIOC, GPIOD, GPIOE */],
   peripherals = true
 )]
 mod app {
     use super::*;
 
-    use futures_lite::future::yield_now;
     use rtic_sync::{
         channel::{Receiver, Sender},
         make_channel,
@@ -276,18 +265,32 @@ mod app {
 
     #[task(priority = 1, shared = [net, device], local = [net_timeout_sender])]
     async fn poll_network(mut ctx: poll_network::Context) {
+        use smoltcp::iface::PollIngressSingleResult::*;
+        use futures_lite::future::yield_now;
+
         let net = &mut ctx.shared.net;
         let dev = &mut ctx.shared.device;
+        let mut processed_packets = 0u32;
 
         loop {
-            let (net, dev) = (&mut *net, &mut *dev);
-            let now = smol_now();
-
-            match (net, dev).lock(|net, dev| net.iface.poll(now, dev, &mut net.sockets)) {
-                smoltcp::iface::PollResult::None => break,
-                smoltcp::iface::PollResult::SocketStateChanged => yield_now().await,
-            };
+            match (&mut *net, &mut *dev).lock(|net, dev| {
+                net.iface
+                    .poll_ingress_single(smol_now(), dev, &mut net.sockets)
+            }) {
+                None => break,
+                PacketProcessed | SocketStateChanged => {
+                    processed_packets = processed_packets.wrapping_add(1);
+                    if processed_packets % 64 == 63 {
+                        yield_now().await
+                    }
+                    continue;
+                }
+            }
         }
+
+        (&mut *net, dev).lock(|net, dev| net.iface.poll_egress(smol_now(), dev, &mut net.sockets));
+
+        yield_now().await;
 
         let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &net.sockets));
 
