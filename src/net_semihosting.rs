@@ -1,10 +1,14 @@
 // https://github.com/nghiaducnt/LearningRIOT/blob/2019.01-my/cpu/cc2538/stellaris_ether/ethernet.c
 
+#![cfg_attr(not(feature = "gcc_toolchain"), allow(dead_code, unused))]
+
 use bare_metal::CriticalSection;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
+#[cfg(feature = "gcc_toolchain")]
 use lm3s6965evb_ethernet_sys::*;
+
 
 use crate::MAC;
 
@@ -107,6 +111,7 @@ impl TxToken for EthernetTxToken<'_> {
 }
 
 fn init(_cs: CriticalSection<'_>) {
+    #[cfg(feature = "gcc_toolchain")]
     unsafe {
         // I think it should not be 0... Docs say to use `SysCtlClockGet` or hardcode
         EthernetInitExpClk(ETH_BASE, 0);
@@ -123,12 +128,17 @@ fn init(_cs: CriticalSection<'_>) {
 
 #[inline(always)]
 pub fn isr_handler(device: &mut Dev) -> Option<InterruptCause> {
+    #[cfg(feature = "gcc_toolchain")]
     unsafe { isr_handler_inner(device) }
+    #[cfg(not(feature = "gcc_toolchain"))]
+    None
 }
 
 #[inline(always)]
 unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
+    #[cfg(feature = "gcc_toolchain")]
     let irq_status;
+    #[cfg(feature = "gcc_toolchain")]
     unsafe {
         irq_status = EthernetIntStatus(ETH_BASE, 0);
         EthernetIntClear(ETH_BASE, irq_status);
@@ -146,21 +156,25 @@ unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
             }
         }
     }
+    #[cfg(feature = "gcc_toolchain")]
     if irq_status & ETH_INT_RXOF != 0 || irq_status & ETH_INT_RXER != 0 {
         defmt::warn!("RXOF or RX");
         // netdev->event_callback(netdev, NETDEV_EVENT_RX_TIMEOUT);
     }
 
+    #[cfg(feature = "gcc_toolchain")]
     if irq_status & ETH_INT_RX != 0 {
         // netdev->event_callback(netdev, NETDEV_EVENT_RX_COMPLETE);
         // defmt::info!("RX Complete"); // New packet arrived
     }
 
+    #[cfg(feature = "gcc_toolchain")]
     if irq_status & ETH_INT_TX != 0 {
         // netdev->event_callback(netdev, NETDEV_EVENT_TX_COMPLETE);
         // defmt::info!("TX Complete");
     }
 
+    #[cfg(feature = "gcc_toolchain")]
     if irq_status & ETH_INT_TXER != 0 {
         // netdev->event_callback(netdev, NETDEV_EVENT_TX_TIMEOUT);
         defmt::warn!("TX Error");
@@ -176,20 +190,26 @@ unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
 }
 
 fn disable() {
+    #[cfg(feature = "gcc_toolchain")]
     unsafe { EthernetDisable(ETH_BASE) }
 }
 
 fn is_packet_available() -> bool {
+    #[cfg(feature = "gcc_toolchain")]
     unsafe { EthernetPacketAvail(ETH_BASE) != 0 }
+    false
 }
 
 fn is_send_space_available() -> bool {
+    #[cfg(feature = "gcc_toolchain")]
     unsafe { EthernetSpaceAvail(ETH_BASE) != 0 }
+    false
 }
 
 fn packet_get(buf: &mut [u8; MTU]) -> isize {
     let ptr = buf.as_mut_ptr();
     let len = buf.len() as i32;
+    #[cfg(feature = "gcc_toolchain")]
     let len = unsafe { EthernetPacketGetNonBlocking(ETH_BASE, ptr, len) };
 
     if len == 0 {
@@ -210,6 +230,8 @@ fn send(packet: &[u8]) {
 
     cortex_m::asm::dmb();
 
+    let ret = 0;
+    #[cfg(feature = "gcc_toolchain")]
     let ret = unsafe { EthernetPacketPutNonBlocking(ETH_BASE, ptr, len) };
 
     assert!(ret > 0);

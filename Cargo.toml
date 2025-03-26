@@ -47,7 +47,8 @@ default = ["qemu"]
 # default = ["ra6m3"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra6m3"]
-qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
+qemu = ["dep:lm3s6965"]
+gcc_toolchain = ["dep:lm3s6965evb_ethernet_sys"]
 
 [dependencies.smoltcp]
 version = "0.12.0"
