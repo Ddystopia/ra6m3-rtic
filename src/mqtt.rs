@@ -17,6 +17,17 @@ mod adapter;
 #[cfg(feature = "tls")]
 mod tls_socket;
 
+impl embedded_time::Clock for Mono {
+    type T = u32;
+
+    const SCALING_FACTOR: embedded_time::rate::Fraction =
+        embedded_time::rate::Fraction::new(1, crate::conf::CLOCK_HZ);
+
+    fn try_now(&self) -> Result<embedded_time::Instant<Self>, embedded_time::clock::Error> {
+        Ok(embedded_time::Instant::new(Mono::now().ticks()))
+    }
+}
+
 use crate::{Mono, socket_storage::MQTT_BUFFER_SIZE};
 
 pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
