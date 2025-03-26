@@ -109,7 +109,6 @@ impl<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>)> Mqt
         &mut self,
         keepalive_interval: fugit::Duration<u32, 1, 1000>,
     ) -> Result<!, minimq::Error<NetError>> {
-        // fixme: it should work but minimq still doesn't doesnt send keepalive packets
         loop {
             let poller = core::future::poll_fn(|_| self.poll());
             match Mono::timeout_after(keepalive_interval / 3, poller).await {
@@ -159,22 +158,16 @@ impl<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>)> Mqt
     }
 }
 
-fn poll(
-    client: &mut MqttClient,
-    topic: &str,
-    bytes: &[u8],
-    _props: &minimq::types::Properties<'_>,
-) {
-    let msg = core::str::from_utf8(bytes).unwrap();
-    defmt::info!("Received message on topic '{}': {}", topic, msg);
-
-    let publication = Publication::new("/rtic_mqtt/hello_world_response", "Hello from RTIC");
-    client.publish(publication).unwrap();
-}
-
 #[define_opaque(OnMessage)]
 fn on_message() -> OnMessage {
-    poll
+    // note: annotations are for rust-analyzer, rustc does not require them
+    |client: &mut MqttClient, topic: &str, bytes: &[u8], _props: &minimq::types::Properties<'_>| {
+        let msg = core::str::from_utf8(bytes).unwrap();
+        defmt::info!("Received message on topic '{}': {}", topic, msg);
+
+        let publication = Publication::new("/rtic_mqtt/hello_world_response", "Hello from RTIC");
+        client.publish(publication).unwrap();
+    }
 }
 
 #[define_opaque(NetLock)]
