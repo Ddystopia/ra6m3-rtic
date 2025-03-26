@@ -32,7 +32,14 @@ use crate::{Mono, socket_storage::MQTT_BUFFER_SIZE};
 
 pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
 
-pub struct Mqtt<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>)> {
+pub struct Mqtt<
+    F: FnMut(
+        &mut MqttClient,
+        &str,
+        &[u8],
+        &minimq::types::Properties<'_>,
+    ) -> Result<(), minimq::Error<NetError>>,
+> {
     socket: SocketHandle,
     on_message: F,
     minimq: Option<minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>>,
@@ -43,7 +50,12 @@ pub struct Mqtt<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Propertie
 }
 
 pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
-pub type OnMessage = impl FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>);
+pub type OnMessage = impl FnMut(
+    &mut MqttClient,
+    &str,
+    &[u8],
+    &minimq::types::Properties<'_>,
+) -> Result<(), minimq::Error<NetError>>;
 
 pub struct Storage {
     pub buffer: [u8; MQTT_BUFFER_SIZE],
@@ -61,7 +73,15 @@ impl Storage {
     }
 }
 
-impl<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>)> Mqtt<F> {
+impl<F> Mqtt<F>
+where
+    F: FnMut(
+        &mut MqttClient,
+        &str,
+        &[u8],
+        &minimq::types::Properties<'_>,
+    ) -> Result<(), minimq::Error<NetError>>,
+{
     pub fn new(
         socket: SocketHandle,
         conf: ConfigBuilder<'static, Broker>,
@@ -96,12 +116,9 @@ impl<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>)> Mqt
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         });
 
-        match minimq
-            .poll(|a, b, c, d| (self.on_message)(a, b, c, d))
-            .map(|_| ())
-        {
-            Ok(()) | Err(minimq::Error::NotReady) => Poll::Pending,
-            Err(other) => Poll::Ready(Err(other)),
+        match minimq.poll(|a, b, c, d| (self.on_message)(a, b, c, d)) {
+            Ok(Some(Ok(()))) | Ok(None) | Err(minimq::Error::NotReady) => Poll::Pending,
+            Ok(Some(Err(err))) | Err(err) => Poll::Ready(Err(err)),
         }
     }
 
@@ -161,12 +178,20 @@ impl<F: FnMut(&mut MqttClient, &str, &[u8], &minimq::types::Properties<'_>)> Mqt
 #[define_opaque(OnMessage)]
 fn on_message() -> OnMessage {
     // note: annotations are for rust-analyzer, rustc does not require them
-    |client: &mut MqttClient, topic: &str, bytes: &[u8], _props: &minimq::types::Properties<'_>| {
+    |client: &mut MqttClient,
+     topic: &str,
+     bytes: &[u8],
+     _props: &minimq::types::Properties<'_>|
+     -> Result<(), minimq::Error<NetError>> {
         let msg = core::str::from_utf8(bytes).unwrap();
         defmt::info!("Received message on topic '{}': {}", topic, msg);
 
         let publication = Publication::new("/rtic_mqtt/hello_world_response", "Hello from RTIC");
-        client.publish(publication).unwrap();
+        match client.publish(publication) {
+            Ok(()) => Ok(()),
+            Err(minimq::PubError::Error(mqtt_error)) => Err(mqtt_error),
+            Err(minimq::PubError::Serialization(_)) => todo!("Mqtt buffer is too small"),
+        }
     }
 }
 
