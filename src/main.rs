@@ -28,7 +28,7 @@ use conf::{
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet},
-    socket::{tcp, udp},
+    socket::tcp,
     time::Instant,
     wire::{self, HardwareAddress, IpCidr},
 };
@@ -84,12 +84,6 @@ fn init_network(
     let [mqtt, http, ..] = &mut storage.tcp_sockets;
     let mqtt = add_tcp_socket(mqtt);
     let http = add_tcp_socket(http);
-
-    for s in storage.udp_sockets.iter_mut() {
-        let rx = udp::PacketBuffer::new(&mut s.rx_metadata[..], &mut s.rx_payload[..]);
-        let tx = udp::PacketBuffer::new(&mut s.tx_metadata[..], &mut s.tx_payload[..]);
-        sockets.add(udp::Socket::new(rx, tx));
-    }
 
     iface.update_ip_addrs(|ip_addrs| {
         ip_addrs.push(IpCidr::new(IP_V4, IP_V4_NETMASK)).unwrap();
@@ -265,8 +259,8 @@ mod app {
 
     #[task(priority = 1, shared = [net, device], local = [net_timeout_sender])]
     async fn poll_network(mut ctx: poll_network::Context) {
-        use smoltcp::iface::PollIngressSingleResult::*;
         use futures_lite::future::yield_now;
+        use smoltcp::iface::PollIngressSingleResult::*;
 
         let net = &mut ctx.shared.net;
         let dev = &mut ctx.shared.device;

@@ -1,6 +1,6 @@
 use smoltcp::{iface, socket::udp};
 
-const NUM_TCP_SOCKETS: usize = 3 /* http */ + 1 /* mqtt */;
+const NUM_TCP_SOCKETS: usize = 1 /* http */ + 1 /* mqtt */;
 const NUM_UDP_SOCKETS: usize = 0;
 const NUM_SOCKETS: usize = NUM_UDP_SOCKETS + NUM_TCP_SOCKETS;
 
