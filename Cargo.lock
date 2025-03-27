@@ -359,6 +359,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "diatomic-waker"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ab03c107fafeb3ee9f5925686dbb7a73bc76e3932abb0d2b365cb64b169cf04c"
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -492,17 +498,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c4c685bbef7fe13c3c6dd4da26841ed3980ef33e841cddfa15ce8a8fb3f1884"
 dependencies = [
  "embedded-hal 1.0.0",
-]
-
-[[package]]
-name = "embedded-hal-bus"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57b4e6ede84339ebdb418cd986e6320a34b017cdf99b5cc3efceec6450b06886"
-dependencies = [
- "critical-section",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
 ]
 
 [[package]]
@@ -1161,6 +1156,7 @@ dependencies = [
  "cortex-m",
  "cortex-m-semihosting",
  "defmt",
+ "diatomic-waker",
  "embedded-io-async",
  "embedded-nal",
  "embedded-time",
@@ -1178,7 +1174,6 @@ dependencies = [
  "replace_with",
  "rtic",
  "rtic-monotonics",
- "rtic-sync",
  "smoltcp",
  "stackfuture",
  "static_cell",
@@ -1295,21 +1290,6 @@ dependencies = [
  "fugit",
  "portable-atomic 1.11.0",
  "rtic-time",
-]
-
-[[package]]
-name = "rtic-sync"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49b1200137ccb2bf272a1801fa6e27264535facd356cb2c1d5bc8e12aa211bad"
-dependencies = [
- "critical-section",
- "embedded-hal 1.0.0",
- "embedded-hal-async",
- "embedded-hal-bus",
- "heapless 0.8.0",
- "portable-atomic 1.11.0",
- "rtic-common",
 ]
 
 [[package]]

@@ -124,23 +124,21 @@ fn exit() -> ! {
 mod app {
     use super::*;
 
-    use rtic_sync::{
-        channel::{Receiver, Sender},
-        make_channel,
-    };
+    use diatomic_waker::{DiatomicWaker, WakeSinkRef, WakeSourceRef};
 
     #[shared]
     struct Shared {
         net: Net,
         device: net_device::Dev,
+        next_net_poll: Option<Instant>,
     }
 
     #[local]
     struct Local {
-        net_timeout_sender: Sender<'static, smoltcp::time::Instant, 1>,
+        net_poll_schedule_tx: WakeSourceRef<'static>,
     }
 
-    #[init(local = [sockets: SocketStorage = SocketStorage::new()])]
+    #[init(local = [sockets: SocketStorage = SocketStorage::new(), net_waker: DiatomicWaker = DiatomicWaker::new()])]
     fn init(mut ctx: init::Context) -> (Shared, Local) {
         ctx.core.SCB.set_sleepdeep();
 
@@ -150,14 +148,18 @@ mod app {
         Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
 
         #[cfg(feature = "ra6m3")]
-        let (net, device, sockets) = init_network(ctx.device.ETHERC0, ctx.cs, ctx.local.sockets);
+        let (mut net, device, sockets) =
+            init_network(ctx.device.ETHERC0, ctx.cs, ctx.local.sockets);
         #[cfg(feature = "qemu")]
-        let (net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
+        let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
         let [mqtt_socket_handle, http_socket_handle] = sockets;
 
-        let (net_timeout_sender, receiver) = make_channel!(smoltcp::time::Instant, 1);
+        let sink = ctx.local.net_waker.sink_ref();
+        let net_poll_schedule_tx = sink.source_ref();
 
-        network_poll_waiter::spawn(receiver).ok();
+        let next_net_poll = net.iface.poll_at(smol_now(), &mut net.sockets);
+
+        network_poll_scheduler::spawn(sink).ok();
 
         defmt::info!("Network initialized");
 
@@ -167,7 +169,16 @@ mod app {
 
         defmt::info!("Init done");
 
-        (Shared { net, device }, Local { net_timeout_sender })
+        (
+            Shared {
+                net,
+                device,
+                next_net_poll,
+            },
+            Local {
+                net_poll_schedule_tx,
+            },
+        )
     }
 
     #[task(priority = 3)]
@@ -222,7 +233,7 @@ mod app {
         };
     }
 
-    #[task(priority = 2, shared = [net, device], local = [net_timeout_sender])]
+    #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
     async fn poll_network(mut ctx: poll_network::Context) {
         let net = &mut ctx.shared.net;
         let dev = &mut ctx.shared.device;
@@ -231,34 +242,39 @@ mod app {
 
         let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
 
-        if let Some(poll_at) = poll_at {
-            ctx.local.net_timeout_sender.try_send(poll_at).ok();
-        }
+        ctx.shared
+            .next_net_poll
+            .lock(|next_net_poll| *next_net_poll = poll_at);
     }
 
     /// This task is responsible for delayed polling of the network stack.
     /// It is used solely by `poll_network` to shcedule itself for `poll_at`.
-    #[task(priority = 1)]
-    async fn network_poll_waiter(
-        _ctx: network_poll_waiter::Context,
-        mut receiver: Receiver<'static, smoltcp::time::Instant, 1>,
+    #[task(priority = 1, shared = [next_net_poll])]
+    async fn network_poll_scheduler(
+        mut ctx: network_poll_scheduler::Context,
+        mut sink: WakeSinkRef<'static>,
     ) {
         let mut delay = None;
 
         enum Event {
             Timeout(()),
-            NewTimeout(smoltcp::time::Instant),
+            NewTimeout(Instant),
         }
 
         loop {
+            let receiver = sink.wait_until(|| {
+                ctx.shared
+                    .next_net_poll
+                    .lock(Option::take)
+                    .map(Event::NewTimeout)
+            });
             let race_delay = async move {
                 match delay {
                     Some(delay) => Event::Timeout(delay.await),
                     None => core::future::pending().await,
                 }
             };
-            let receiver = async { Event::NewTimeout(receiver.recv().await.unwrap()) };
-            match futures_lite::future::or(race_delay, receiver).await {
+            match futures_lite::future::or(receiver, race_delay).await {
                 Event::Timeout(()) => {
                     NET_WAKER.wake_by_ref();
                     delay = None
