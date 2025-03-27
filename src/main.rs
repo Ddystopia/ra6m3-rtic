@@ -25,6 +25,7 @@ use conf::{
     CLOCK_HZ, IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC,
     SYS_TICK_HZ,
 };
+use net_device::{SmoltcpDev, MTU};
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet},
@@ -72,7 +73,12 @@ fn init_network(
     let address = smoltcp::wire::EthernetAddress(MAC);
     let conf = Config::new(HardwareAddress::Ethernet(address));
 
-    let mut iface = Interface::new(conf, &mut device, smol_now());
+    let mut iface = {
+        let mut rx = [0; MTU];
+        let mut tx = [0; MTU];
+        let mut device = SmoltcpDev::new(&mut device, &mut rx, &mut tx);
+        Interface::new(conf, &mut device, smol_now())
+    };
     let mut sockets = SocketSet::new(&mut storage.sockets[..]);
 
     let mut add_tcp_socket = |s: &'static mut TcpSocketStorage| -> SocketHandle {
@@ -138,6 +144,8 @@ mod app {
     #[local]
     struct Local {
         net_timeout_sender: Sender<'static, smoltcp::time::Instant, 1>,
+        net_rx: [u8; MTU],
+        net_tx: [u8; MTU],
     }
 
     #[init(local = [sockets: SocketStorage = SocketStorage::new()])]
@@ -165,9 +173,19 @@ mod app {
         mqtt_task::spawn(mqtt_socket_handle).ok();
         http_task::spawn(http_socket_handle).ok();
 
+        let net_tx = [0; MTU];
+        let net_rx = [0; MTU];
+
         defmt::info!("Init done");
 
-        (Shared { net, device }, Local { net_timeout_sender })
+        (
+            Shared { net, device },
+            Local {
+                net_timeout_sender,
+                net_rx,
+                net_tx,
+            },
+        )
     }
 
     #[task(priority = 3)]
@@ -215,21 +233,26 @@ mod app {
 
     // todo: is there a reason to give this task higher priority?
     #[task(binds = ETHERNET, priority = 2, shared = [device])]
-    fn ethernet_isr(mut ctx: ethernet_isr::Context) {
-        match ctx.shared.device.lock(net_device::isr_handler) {
+    fn ethernet_isr(ctx: ethernet_isr::Context) {
+        match net_device::isr_handler(ctx.shared.device) {
             Some(net_device::InterruptCause::Receive) => NET_WAKER.wake_by_ref(),
             _ => (),
         };
     }
 
-    #[task(priority = 2, shared = [net, device], local = [net_timeout_sender])]
+    // Polling network has higher priotity to read data from the network card asap.
+    #[task(priority = 2, shared = [net, device], local = [net_timeout_sender, net_tx, net_rx])]
     async fn poll_network(mut ctx: poll_network::Context) {
         let net = &mut ctx.shared.net;
-        let dev = &mut ctx.shared.device;
+        let mut dev = SmoltcpDev::new(
+            ctx.shared.device,
+            &mut ctx.local.net_tx,
+            &mut ctx.local.net_rx,
+        );
 
-        (&mut *net, &mut *dev).lock(|net, dev| net.iface.poll(smol_now(), dev, &mut net.sockets));
+        net.lock(move |net| net.iface.poll(smol_now(), &mut dev, &mut net.sockets));
 
-        let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
+        let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &net.sockets));
 
         if let Some(poll_at) = poll_at {
             ctx.local.net_timeout_sender.try_send(poll_at).ok();

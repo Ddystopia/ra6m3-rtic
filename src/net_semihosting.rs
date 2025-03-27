@@ -1,5 +1,7 @@
 // https://github.com/nghiaducnt/LearningRIOT/blob/2019.01-my/cpu/cc2538/stellaris_ether/ethernet.c
 
+use core::cell::RefCell;
+
 use bare_metal::CriticalSection;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -17,51 +19,66 @@ pub enum InterruptCause {
     ReceiveError,
 }
 
-const MTU: usize = 1500;
+pub const MTU: usize = 1500;
 
-pub struct Dev {
-    rx: [u8; MTU],
-    tx: [u8; MTU],
+pub struct SmoltcpDev<'a, M: rtic::Mutex> {
+    token: RefCell<M>,
+    tx: &'a mut [u8; MTU],
+    rx: &'a mut [u8; MTU],
 }
 
-pub struct EthernetRxToken<'a>(&'a mut [u8; MTU]);
-pub struct EthernetTxToken<'a>(&'a mut [u8; MTU]);
+pub struct Dev {}
 
-impl Dev {
-    pub fn new(cs: CriticalSection<'_>) -> Self {
-        init(cs);
+pub struct EthernetRxToken<'a, M: rtic::Mutex>(&'a mut [u8; MTU], &'a RefCell<M>);
+pub struct EthernetTxToken<'a, M: rtic::Mutex>(&'a mut [u8; MTU], &'a RefCell<M>);
 
+impl<'a, M: rtic::Mutex<T = Dev>> SmoltcpDev<'a, M> {
+    pub fn new(token: M, tx: &'a mut [u8; MTU], rx: &'a mut [u8; MTU]) -> Self {
         Self {
-            rx: [0; MTU],
-            tx: [0; MTU],
+            token: RefCell::new(token),
+            tx,
+            rx,
         }
     }
 }
 
-impl Drop for Dev {
-    fn drop(&mut self) {
-        disable()
-    }
-}
-
-impl Device for Dev {
-    type RxToken<'a> = EthernetRxToken<'a>;
-    type TxToken<'a> = EthernetTxToken<'a>;
+impl<M: rtic::Mutex<T = Dev>> Device for SmoltcpDev<'_, M> {
+    type RxToken<'a>
+        = EthernetRxToken<'a, M>
+    where
+        Self: 'a;
+    type TxToken<'a>
+        = EthernetTxToken<'a, M>
+    where
+        Self: 'a;
 
     // N.B.: Tokens are mutable borrowing `self`, so it is impossible to have
     //       multiple tokens.
 
     fn receive(&mut self, _: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if is_packet_available() && is_send_space_available() {
-            Some((EthernetRxToken(&mut self.rx), EthernetTxToken(&mut self.tx)))
+        let (packet_available, send_space_available) = self
+            .token
+            .get_mut()
+            .lock(|dev| (dev.is_packet_available(), dev.is_send_space_available()));
+
+        if packet_available && send_space_available {
+            Some((
+                EthernetRxToken(self.rx, &self.token),
+                EthernetTxToken(self.tx, &self.token),
+            ))
         } else {
             None
         }
     }
 
     fn transmit(&mut self, _: Instant) -> Option<Self::TxToken<'_>> {
-        if is_send_space_available() {
-            Some(EthernetTxToken(&mut self.rx))
+        let send_space_available = self
+            .token
+            .get_mut()
+            .lock(|dev| dev.is_send_space_available());
+
+        if send_space_available {
+            Some(EthernetTxToken(self.rx, &self.token))
         } else {
             None
         }
@@ -71,81 +88,66 @@ impl Device for Dev {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet;
         caps.max_transmission_unit = MTU;
+        // I don't know what `max_burst_size` is
         caps.max_burst_size = Some(MTU);
         caps.checksum = ChecksumCapabilities::default();
         caps
     }
 }
 
-impl RxToken for EthernetRxToken<'_> {
+impl<M: rtic::Mutex<T = Dev>> RxToken for EthernetRxToken<'_, M> {
     fn consume<R, F>(self, f: F) -> R
     where
         F: FnOnce(&[u8]) -> R,
     {
-        let len = packet_get(self.0);
-        let len = usize::try_from(len).unwrap_or(MTU);
-
-        f(&self.0[..len])
+        match self.1.borrow_mut().lock(|d| d.packet_get(self.0)) {
+            Ok(len) => f(&self.0[..len]),
+            Err(code) => {
+                defmt::warn!("Packet get error: {}", code);
+                f(&[])
+            }
+        }
     }
 }
 
-impl TxToken for EthernetTxToken<'_> {
+impl<M: rtic::Mutex<T = Dev>> TxToken for EthernetTxToken<'_, M> {
     fn consume<R, F>(self, length: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        assert!(length <= MTU);
+        let length = length.min(MTU);
 
         let result = f(&mut self.0[..length]);
 
-        assert!(is_send_space_available());
-
-        send(&self.0[..length]);
+        self.1.borrow_mut().lock(|d| d.send(&self.0[..length]));
 
         result
     }
 }
 
-fn init(_cs: CriticalSection<'_>) {
-    unsafe {
-        // I think it should not be 0... Docs say to use `SysCtlClockGet` or hardcode
-        EthernetInitExpClk(ETH_BASE, 0);
-        EthernetConfigSet(ETH_BASE, ETH_CFG_TX_DPLXEN | ETH_CFG_TX_PADEN);
-        EthernetMACAddrSet(ETH_BASE, MAC.as_slice().as_ptr().cast_mut().cast());
-        EthernetEnable(ETH_BASE);
-
-        // stellaris_ether_netdev.c:69: dev->irq = ETH_INT_PHY;
-        // - what this line means?
-
-        EthernetIntEnable(ETH_BASE, ETH_INT_PHY);
-    }
-}
-
 #[inline(always)]
-pub fn isr_handler(device: &mut Dev) -> Option<InterruptCause> {
-    unsafe { isr_handler_inner(device) }
-}
+pub fn isr_handler(mut device: impl rtic::Mutex<T = Dev>) -> Option<InterruptCause> {
+    let irq_status = device.lock(|_| {
+        unsafe {
+            let irq_status = EthernetIntStatus(ETH_BASE, 0);
+            EthernetIntClear(ETH_BASE, irq_status);
 
-#[inline(always)]
-unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
-    let irq_status;
-    unsafe {
-        irq_status = EthernetIntStatus(ETH_BASE, 0);
-        EthernetIntClear(ETH_BASE, irq_status);
-
-        if irq_status & ETH_INT_PHY != 0 {
-            let mr1 = EthernetPHYRead(ETH_BASE, PHY_MR1 as u8);
-            if mr1 & PHY_MR1_LINK != 0 {
-                defmt::info!("Link up");
-                // priv_stellaris_eth_dev.link_up = true;
-                // netdev->event_callback(netdev, NETDEV_EVENT_LINK_UP);
-            } else {
-                defmt::info!("Link down");
-                // priv_stellaris_eth_dev.link_up = false;
-                // netdev->event_callback(netdev, NETDEV_EVENT_LINK_DOWN);
+            if irq_status & ETH_INT_PHY != 0 {
+                let mr1 = EthernetPHYRead(ETH_BASE, PHY_MR1 as u8);
+                if mr1 & PHY_MR1_LINK != 0 {
+                    defmt::info!("Link up");
+                    // priv_stellaris_eth_dev.link_up = true;
+                    // netdev->event_callback(netdev, NETDEV_EVENT_LINK_UP);
+                } else {
+                    defmt::info!("Link down");
+                    // priv_stellaris_eth_dev.link_up = false;
+                    // netdev->event_callback(netdev, NETDEV_EVENT_LINK_DOWN);
+                }
             }
+            irq_status
         }
-    }
+    });
+
     if irq_status & ETH_INT_RXOF != 0 || irq_status & ETH_INT_RXER != 0 {
         defmt::warn!("RXOF or RX");
         // netdev->event_callback(netdev, NETDEV_EVENT_RX_TIMEOUT);
@@ -175,46 +177,68 @@ unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
     Some(InterruptCause::Receive)
 }
 
-fn disable() {
-    unsafe { EthernetDisable(ETH_BASE) }
-}
+impl Dev {
+    pub fn new(_cs: CriticalSection<'_>, #[cfg(feature = "ra6m3")] eth: ra6m3::ETHERC0) -> Self {
+        unsafe {
+            // I think it should not be 0... Docs say to use `SysCtlClockGet` or hardcode
+            EthernetInitExpClk(ETH_BASE, 0);
+            EthernetConfigSet(ETH_BASE, ETH_CFG_TX_DPLXEN | ETH_CFG_TX_PADEN);
+            EthernetMACAddrSet(ETH_BASE, MAC.as_slice().as_ptr().cast_mut().cast());
+            EthernetEnable(ETH_BASE);
 
-fn is_packet_available() -> bool {
-    unsafe { EthernetPacketAvail(ETH_BASE) != 0 }
-}
+            // stellaris_ether_netdev.c:69: dev->irq = ETH_INT_PHY;
+            // - what this line means?
 
-fn is_send_space_available() -> bool {
-    unsafe { EthernetSpaceAvail(ETH_BASE) != 0 }
-}
+            EthernetIntEnable(ETH_BASE, ETH_INT_PHY);
+        };
 
-fn packet_get(buf: &mut [u8; MTU]) -> isize {
-    let ptr = buf.as_mut_ptr();
-    let len = buf.len() as i32;
-    let len = unsafe { EthernetPacketGetNonBlocking(ETH_BASE, ptr, len) };
-
-    if len == 0 {
-        defmt::warn!("No packet available");
-        return 0;
+        Self {}
+    }
+    fn is_packet_available(&mut self) -> bool {
+        unsafe { EthernetPacketAvail(ETH_BASE) != 0 }
     }
 
-    assert!(len < 0 || len as usize <= buf.len());
+    fn is_send_space_available(&mut self) -> bool {
+        unsafe { EthernetSpaceAvail(ETH_BASE) != 0 }
+    }
 
-    cortex_m::asm::dmb();
+    fn packet_get(&mut self, buf: &mut [u8; MTU]) -> Result<usize, i32> {
+        let ptr = buf.as_mut_ptr();
+        let len = buf.len() as i32;
+        let len = unsafe { EthernetPacketGetNonBlocking(ETH_BASE, ptr, len) };
 
-    len as isize
+        cortex_m::asm::dmb();
+
+        match usize::try_from(len) {
+            Ok(len) => Ok(len),
+            Err(_) => Err(len),
+        }
+    }
+
+    fn send(&mut self, packet: &[u8]) {
+        let ptr = packet.as_ptr().cast_mut();
+        let len = packet.len() as i32;
+
+        cortex_m::asm::dmb();
+
+        let ret = unsafe { EthernetPacketPutNonBlocking(ETH_BASE, ptr, len) };
+
+        if ret == 0 {
+            defmt::warn!("Packet sent while no space was available");
+        }
+    }
 }
 
-fn send(packet: &[u8]) {
-    let ptr = packet.as_ptr().cast_mut();
-    let len = packet.len() as i32;
+impl Drop for Dev {
+    fn drop(&mut self) {
+        unsafe { EthernetDisable(ETH_BASE) }
+    }
+}
 
-    cortex_m::asm::dmb();
+impl rtic::Mutex for Dev {
+    type T = Self;
 
-    let ret = unsafe { EthernetPacketPutNonBlocking(ETH_BASE, ptr, len) };
-
-    assert!(ret > 0);
-
-    if ret == 0 {
-        defmt::warn!("Packet sent while no space was available");
+    fn lock<R>(&mut self, f: impl FnOnce(&mut Self::T) -> R) -> R {
+        f(self)
     }
 }
