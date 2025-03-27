@@ -118,7 +118,7 @@ fn exit() -> ! {
 #[rtic::app(
   device = lm3s6965,
   // device = ra6m3,
-  dispatchers = [GPIOA, GPIOB, /* GPIOC, GPIOD, GPIOE */],
+  dispatchers = [GPIOA, GPIOB, GPIOC, /* GPIOD, GPIOE */],
   peripherals = true
 )]
 mod app {
@@ -132,7 +132,6 @@ mod app {
     #[shared]
     struct Shared {
         net: Net,
-        // maybe move to `Local`.
         device: net_device::Dev,
     }
 
@@ -214,11 +213,26 @@ mod app {
         match http::http(ctx, socket).await {}
     }
 
-    #[task(binds = ETHERNET, priority = 1, shared = [device])]
+    // todo: is there a reason to give this task higher priority?
+    #[task(binds = ETHERNET, priority = 2, shared = [device])]
     fn ethernet_isr(mut ctx: ethernet_isr::Context) {
-        let cause = ctx.shared.device.lock(net_device::isr_handler);
-        if cause == Some(net_device::InterruptCause::Receive) {
-            NET_WAKER.wake_by_ref();
+        match ctx.shared.device.lock(net_device::isr_handler) {
+            Some(net_device::InterruptCause::Receive) => NET_WAKER.wake_by_ref(),
+            _ => (),
+        };
+    }
+
+    #[task(priority = 2, shared = [net, device], local = [net_timeout_sender])]
+    async fn poll_network(mut ctx: poll_network::Context) {
+        let net = &mut ctx.shared.net;
+        let dev = &mut ctx.shared.device;
+
+        (&mut *net, &mut *dev).lock(|net, dev| net.iface.poll(smol_now(), dev, &mut net.sockets));
+
+        let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
+
+        if let Some(poll_at) = poll_at {
+            ctx.local.net_timeout_sender.try_send(poll_at).ok();
         }
     }
 
@@ -254,42 +268,6 @@ mod app {
                     delay = Some(Mono::delay_until(next));
                 }
             }
-        }
-    }
-
-    #[task(priority = 1, shared = [net, device], local = [net_timeout_sender])]
-    async fn poll_network(mut ctx: poll_network::Context) {
-        use futures_lite::future::yield_now;
-        use smoltcp::iface::PollIngressSingleResult::*;
-
-        let net = &mut ctx.shared.net;
-        let dev = &mut ctx.shared.device;
-        let mut processed_packets = 0u32;
-
-        loop {
-            match (&mut *net, &mut *dev).lock(|net, dev| {
-                net.iface
-                    .poll_ingress_single(smol_now(), dev, &mut net.sockets)
-            }) {
-                None => break,
-                PacketProcessed | SocketStateChanged => {
-                    processed_packets = processed_packets.wrapping_add(1);
-                    if processed_packets % 64 == 63 {
-                        yield_now().await
-                    }
-                    continue;
-                }
-            }
-        }
-
-        (&mut *net, dev).lock(|net, dev| net.iface.poll_egress(smol_now(), dev, &mut net.sockets));
-
-        yield_now().await;
-
-        let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &net.sockets));
-
-        if let Some(poll_at) = poll_at {
-            ctx.local.net_timeout_sender.try_send(poll_at).ok();
         }
     }
 
