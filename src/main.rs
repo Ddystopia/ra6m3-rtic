@@ -257,7 +257,9 @@ mod app {
                     delay = None
                 }
                 Event::NewTimeout(at) => {
-                    let next = fugit::Instant::<u32, 1, 1000>::from_ticks(at.total_millis() as u32);
+                    let total_micros = at.total_micros();
+                    let total_millis_round_up = ((total_micros + 999) / 1000) as u32;
+                    let next = fugit::Instant::<u32, 1, 1000>::from_ticks(total_millis_round_up);
                     delay = Some(Mono::delay_until(next));
                 }
             }
