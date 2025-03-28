@@ -152,10 +152,7 @@ where
             }
             match self.minimq().client().subscribe(topics, properties) {
                 Ok(_) => Poll::Ready(Ok(())),
-                Err(minimq::Error::NotReady) => {
-                    // todo: do we need to poll here?
-                    self.poll().map(|r| r.map(|_| ()))
-                }
+                Err(minimq::Error::NotReady) => self.poll().map(|r| r.map(|_| ())),
                 Err(other) => Poll::Ready(Err(other)),
             }
         })
