@@ -195,26 +195,12 @@ mod app {
         core::future::pending().await
     }
 
-    #[task(
-        priority = 1,
-        shared = [net],
-        local = [
-            storage: mqtt::Storage = mqtt::Storage::new(),
-            token_place: poll_share::TokenProviderPlace<mqtt::NetLock> = poll_share::TokenProviderPlace::new(),
-        ]
-    )]
+    #[task(priority = 1, shared = [net], local = [storage: mqtt::Storage = mqtt::Storage::new()])]
     async fn mqtt_task(ctx: mqtt_task::Context, socket: SocketHandle) -> ! {
         match mqtt::mqtt(ctx, socket).await {}
     }
 
-    #[task(
-        priority = 1,
-        shared = [net],
-        local = [
-            storage: http::Storage = http::Storage::new(),
-            token_place: poll_share::TokenProviderPlace<http::NetLock> = poll_share::TokenProviderPlace::new(),
-        ]
-    )]
+    #[task(priority = 1, shared = [net], local = [storage: http::Storage = http::Storage::new()])]
     async fn http_task(ctx: http_task::Context, socket: SocketHandle) -> ! {
         match http::http(ctx, socket).await {}
     }

@@ -3,7 +3,11 @@ use rtic_monotonics::fugit::ExtU32;
 use smoltcp::iface::SocketHandle;
 use timer::Timer;
 
-use crate::{poll_share::TokenProvider, socket::TcpSocket, socket_storage::HTTP_BUFFER_SIZE};
+use crate::{
+    poll_share::{self, TokenProvider},
+    socket::TcpSocket,
+    socket_storage::HTTP_BUFFER_SIZE,
+};
 
 // todo: use https://docs.rs/smoltcp/latest/smoltcp/socket/tcp/struct.Socket.html#method.set_timeout and others
 
@@ -16,6 +20,7 @@ pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
 pub struct Storage {
     pub app: Option<picoserve::Router<AppRouter, AppState>>,
     pub buf: [u8; HTTP_BUFFER_SIZE],
+    pub token_place: poll_share::TokenProviderPlace<NetLock>,
 }
 
 impl Storage {
@@ -23,14 +28,15 @@ impl Storage {
         Self {
             app: None,
             buf: [0; HTTP_BUFFER_SIZE],
+            token_place: poll_share::TokenProviderPlace::new(),
         }
     }
 }
 
 #[define_opaque(NetLock)]
 pub async fn http(ctx: crate::app::http_task::Context<'static>, socket_handle: SocketHandle) -> ! {
-    let net = TokenProvider::new(ctx.local.token_place, ctx.shared.net);
     let storage = ctx.local.storage;
+    let net = TokenProvider::new(&mut storage.token_place, ctx.shared.net);
     let app = storage.app.get_or_insert(make_app());
 
     loop {

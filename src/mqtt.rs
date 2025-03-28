@@ -2,7 +2,7 @@ use core::task::{Poll, Waker};
 
 use crate::{
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT},
-    poll_share::TokenProvider,
+    poll_share::{self, TokenProvider},
     socket::{self},
 };
 use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError};
@@ -60,6 +60,7 @@ pub type OnMessage = impl FnMut(
 pub struct Storage {
     pub buffer: [u8; MQTT_BUFFER_SIZE],
     pub mqtt: Option<Mqtt<OnMessage>>,
+    pub token_place: poll_share::TokenProviderPlace<NetLock>,
     pub alloc: MqttAlocation,
 }
 
@@ -69,6 +70,7 @@ impl Storage {
             mqtt: None,
             buffer: [0; MQTT_BUFFER_SIZE],
             alloc: MqttAlocation::new(),
+            token_place: poll_share::TokenProviderPlace::new(),
         }
     }
 }
@@ -198,7 +200,7 @@ fn on_message() -> OnMessage {
 #[define_opaque(NetLock)]
 pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: SocketHandle) -> ! {
     let storage = ctx.local.storage;
-    let net = TokenProvider::new(ctx.local.token_place, ctx.shared.net);
+    let net = TokenProvider::new(&mut storage.token_place, ctx.shared.net);
     let conf = minimq::ConfigBuilder::new(
         Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
             MQTT_BROKER_IP,
