@@ -35,12 +35,7 @@ use smoltcp::{
 
 use socket_storage::{SocketStorage, TcpSocketStorage};
 
-defmt::timestamp!("{=usize}", {
-    use core::sync::atomic::{AtomicUsize, Ordering};
-    static COUNT: AtomicUsize = AtomicUsize::new(0);
-
-    COUNT.fetch_add(1, Ordering::Relaxed)
-});
+defmt::timestamp!("{=u32}", Mono::now().ticks());
 
 // fixme: u32 overflow, as it is in milliseconds
 systick_monotonic!(Mono, CLOCK_HZ);
