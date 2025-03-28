@@ -57,8 +57,6 @@ fn init_network(
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
 ) -> (Net, net_device::Dev, [SocketHandle; 2]) {
-    defmt::info!("Starting device at {}", Mono::now().ticks());
-
     let mut device = net_device::Dev::new(
         cs,
         #[cfg(feature = "ra6m3")]
@@ -156,8 +154,6 @@ mod app {
 
         network_poll_scheduler::spawn(sink).ok();
 
-        defmt::info!("Network initialized");
-
         waiter::spawn().ok();
         mqtt_task::spawn(mqtt_socket_handle).ok();
         http_task::spawn(http_socket_handle).ok();
@@ -180,17 +176,17 @@ mod app {
     async fn waiter(_: waiter::Context) -> ! {
         let mut next = Mono::now();
 
-        defmt::info!("Waiter task: 1 {}", Mono::now().ticks());
+        defmt::info!("Waiter task: 1");
 
         next += 1000.millis();
         Mono::delay_until(next).await;
 
-        defmt::info!("Waiter task: 2 {}", Mono::now().ticks());
+        defmt::info!("Waiter task: 2");
 
         next += 1000.millis();
         Mono::delay_until(next).await;
 
-        defmt::info!("Waiter task: 3 {}", Mono::now().ticks());
+        defmt::info!("Waiter task: 3");
 
         core::future::pending().await
     }

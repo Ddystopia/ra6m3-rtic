@@ -162,14 +162,14 @@ impl TcpClientStack for EmbeddedNalAdapter {
         Ok(self.socket_handle.take().ok_or(NetError::SocketUsed)?)
     }
 
-    // note: this path is called x3-x5 times for some reason
+    // note: this path is called x3-x5 times for some reason. Who wakes mqtt task so much?
     // #[define_opaque(ConnectFut)]
     fn connect(
         &mut self,
         _handle: &mut Self::TcpSocket,
         remote: core::net::SocketAddr,
     ) -> nb::Result<(), Self::Error> {
-        defmt::info!("Connecting to {:?}", remote);
+        defmt::debug!("Connecting to {:?}", remote);
         if let Some(mut fut) = self.connect_future.as_mut().as_pin_mut() {
             let mut cx = Context::from_waker(&self.waker);
             return match fut.as_mut().poll(&mut cx) {
