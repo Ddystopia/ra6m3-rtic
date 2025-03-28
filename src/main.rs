@@ -35,7 +35,7 @@ use smoltcp::{
 
 use socket_storage::{SocketStorage, TcpSocketStorage};
 
-defmt::timestamp!("{=u32}", Mono::now().ticks());
+defmt::timestamp!("{=f32}", (Mono::now().ticks() / 10) as f32 / 100.0);
 
 // fixme: u32 overflow, as it is in milliseconds
 systick_monotonic!(Mono, CLOCK_HZ);
