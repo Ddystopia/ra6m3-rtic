@@ -12,9 +12,11 @@ mod net_device;
 
 mod conf;
 mod http;
+mod mpmc;
 mod mqtt;
 #[cfg(feature = "ra6m3")]
 mod net_device;
+mod oneshot;
 mod poll_share;
 mod socket;
 mod socket_storage;
@@ -56,7 +58,11 @@ fn init_network(
     #[cfg(feature = "ra6m3")] etherc0: ra6m3::ETHERC0,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
-) -> (Net, net_device::Dev, [SocketHandle; 2]) {
+) -> (
+    Net,
+    net_device::Dev,
+    (SocketHandle, [SocketHandle; http::WORKERS]),
+) {
     let mut device = net_device::Dev::new(
         cs,
         #[cfg(feature = "ra6m3")]
@@ -74,9 +80,10 @@ fn init_network(
         sockets.add(tcp::Socket::new(rx, tx))
     };
 
-    let [mqtt, http, ..] = &mut storage.tcp_sockets;
+    let [mqtt, http @ ..] = &mut storage.tcp_sockets;
     let mqtt = add_tcp_socket(mqtt);
-    let http = add_tcp_socket(http);
+    let http = http.each_mut().map(|s| add_tcp_socket(s));
+    let http = core::array::from_fn(|i| http[i]);
 
     iface.update_ip_addrs(|ip_addrs| {
         ip_addrs.push(IpCidr::new(IP_V4, IP_V4_NETMASK)).unwrap();
@@ -94,7 +101,7 @@ fn init_network(
         .add_default_ipv6_route(IP_V6_GATEWAY)
         .unwrap();
 
-    (Net { iface, sockets }, device, [mqtt, http])
+    (Net { iface, sockets }, device, (mqtt, http))
 }
 
 #[expect(dead_code)]
@@ -145,7 +152,7 @@ mod app {
             init_network(ctx.device.ETHERC0, ctx.cs, ctx.local.sockets);
         #[cfg(feature = "qemu")]
         let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
-        let [mqtt_socket_handle, http_socket_handle] = sockets;
+        let (mqtt_socket, http_sockets) = sockets;
 
         let sink = ctx.local.net_waker.sink_ref();
         let net_poll_schedule_tx = sink.source_ref();
@@ -155,10 +162,8 @@ mod app {
         network_poll_scheduler::spawn(sink).ok();
 
         waiter::spawn().ok();
-        mqtt_task::spawn(mqtt_socket_handle).ok();
-        http_task::spawn(http_socket_handle).ok();
-
-        defmt::info!("Init done");
+        mqtt_task::spawn(mqtt_socket).ok();
+        http_task::spawn(http_sockets).ok();
 
         (
             Shared {
@@ -197,8 +202,8 @@ mod app {
     }
 
     #[task(priority = 1, shared = [net], local = [storage: http::Storage = http::Storage::new()])]
-    async fn http_task(ctx: http_task::Context, socket: SocketHandle) -> ! {
-        match http::http(ctx, socket).await {}
+    async fn http_task(ctx: http_task::Context, sockets: [SocketHandle; http::WORKERS]) -> ! {
+        match http::http(ctx, sockets).await {}
     }
 
     // todo: is there a reason to give this task higher priority?

@@ -684,6 +684,27 @@ impl<M: NetMutex> TcpSocket<M> {
     }
 }
 
+impl<M: NetMutex> core::fmt::Debug for TcpSocket<M> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("TcpSocket")
+            .field("local_endpoint", &self.local_endpoint())
+            .field("remote_endpoint", &self.remote_endpoint())
+            .field("state", &self.state())
+            .finish()
+    }
+}
+
+impl<M: NetMutex> Clone for TcpSocket<M> {
+    fn clone(&self) -> Self {
+        Self {
+            io: SocketInner {
+                net: self.io.net,
+                handle: self.io.handle,
+            },
+        }
+    }
+}
+
 mod embedded_io_impls {
     use super::*;
 

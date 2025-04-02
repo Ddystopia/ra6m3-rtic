@@ -595,6 +595,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures-concurrency"
+version = "7.6.3"
+dependencies = [
+ "futures-core",
+ "futures-lite",
+ "pin-project",
+]
+
+[[package]]
 name = "futures-core"
 version = "0.3.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1059,6 +1068,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pin-project"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "677f1add503faace112b9f1373e43e9e054bfdd22ff1a63c1bc485eaec6a6a8a"
+dependencies = [
+ "pin-project-internal",
+]
+
+[[package]]
+name = "pin-project-internal"
+version = "1.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e918e4ff8c4549eb882f14b3a4bc8c8bc93de829416eacf579f1207a8fbf861"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.99",
+]
+
+[[package]]
 name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1161,6 +1190,7 @@ dependencies = [
  "embedded-nal",
  "embedded-time",
  "embedded-tls",
+ "futures-concurrency",
  "futures-lite",
  "futures-util",
  "heapless 0.8.0",
@@ -1173,6 +1203,7 @@ dependencies = [
  "rand_core",
  "replace_with",
  "rtic",
+ "rtic-common",
  "rtic-monotonics",
  "smoltcp",
  "stackfuture",

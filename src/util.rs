@@ -14,3 +14,10 @@ pub const fn waker(f: fn()) -> Waker {
 
     unsafe { Waker::from_raw(raw) }
 }
+
+#[expect(dead_code)]
+pub async fn get_waker() -> Waker {
+    use core::{future::poll_fn, task::Poll};
+
+    poll_fn(|cx| Poll::Ready(cx.waker().clone())).await
+}
