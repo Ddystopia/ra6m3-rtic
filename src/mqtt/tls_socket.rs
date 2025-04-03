@@ -6,17 +6,18 @@ use rtic::Mutex;
 
 use crate::Net;
 
-use super::socket::{Socket, SocketInner, shutdown};
+use super::socket::{SocketInner, TcpSocket};
 
-type TlsConnection<'a, R> = embedded_tls::TlsConnection<'a, SocketInner<R>, Aes128GcmSha256>;
-type TlsReader<'a, R> = embedded_tls::TlsReader<'a, SocketInner<R>, Aes128GcmSha256>;
-type TlsWriter<'a, R> = embedded_tls::TlsWriter<'a, SocketInner<R>, Aes128GcmSha256>;
+type TlsConnection<'a, M> = embedded_tls::TlsConnection<'a, SocketInner<M>, Aes128GcmSha256>;
+type TlsReader<'a, M> = embedded_tls::TlsReader<'a, SocketInner<M>, Aes128GcmSha256>;
+type TlsWriter<'a, M> = embedded_tls::TlsWriter<'a, SocketInner<M>, Aes128GcmSha256>;
 
 pub struct Rng;
 
-pub struct TlsSocket<'a, R: Mutex<T = Net> + 'static>(TlsConnection<'a, R>);
+pub(crate) struct TlsSocket<'a, M: Mutex<T = Net> + 'static>(TlsConnection<'a, M>);
 
 impl CryptoRng for Rng {}
+
 impl RngCore for Rng {
     fn next_u32(&mut self) -> u32 {
         todo!()
@@ -35,46 +36,14 @@ impl RngCore for Rng {
     }
 }
 
-impl<R: Mutex<T = Net>> picoserve::io::Socket for TlsSocket<'_, R> {
-    type Error = TlsError;
-
-    type ReadHalf<'a>
-        = TlsReader<'a, R>
-    where
-        Self: 'a;
-
-    type WriteHalf<'a>
-        = TlsWriter<'a, R>
-    where
-        Self: 'a;
-
-    fn split(&mut self) -> (Self::ReadHalf<'_>, Self::WriteHalf<'_>) {
-        self.0.split()
-    }
-
-    async fn shutdown<Timer: picoserve::Timer>(
-        self,
-        timeouts: &picoserve::Timeouts<Timer::Duration>,
-        timer: &mut Timer,
-    ) -> Result<(), picoserve::Error<Self::Error>> {
-        match self.0.close().await {
-            Ok(socket) => Ok(shutdown(socket, timeouts, timer).await),
-            Err((socket, tls_err)) => {
-                shutdown(socket, timeouts, timer).await;
-                Err(picoserve::Error::Write(tls_err))
-            }
-        }
-    }
-}
-
 impl<'a, R: Mutex<T = Net>> TlsSocket<'a, R> {
     pub fn new(
-        delagate: Socket<R>,
+        delagate: TcpSocket<R>,
         record_read_buf: &'a mut [u8],
         record_write_buf: &'a mut [u8],
     ) -> Self {
         Self(TlsConnection::new(
-            delagate.0,
+            delagate.into(),
             record_read_buf,
             record_write_buf,
         ))
@@ -89,5 +58,14 @@ impl<'a, R: Mutex<T = Net>> TlsSocket<'a, R> {
     {
         self.0.open::<Provider>(ctx).await
     }
-}
 
+    pub async fn close(self) -> Result<(), TlsError> {
+        match self.0.close().await {
+            Ok(socket) => Ok(TcpSocket::from(socket).disconnect().await),
+            Err((socket, tls_err)) => {
+                TcpSocket::from(socket).disconnect().await;
+                Err(tls_err)
+            }
+        }
+    }
+}

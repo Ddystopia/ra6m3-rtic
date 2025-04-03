@@ -106,7 +106,8 @@ where
     fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
             let alloc = self.alloc.take().unwrap();
-            let adapter = EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone());
+            let adapter =
+                EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone(), None);
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         })
     }
@@ -114,7 +115,8 @@ where
     pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<NetError>>> {
         let minimq = self.minimq.get_or_insert_with(|| {
             let alloc = self.alloc.take().unwrap();
-            let adapter = EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone());
+            let adapter =
+                EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone(), None);
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         });
 

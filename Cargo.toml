@@ -27,7 +27,7 @@ static_cell = "2.1.0"
 picoserve = { version = "0.15.0", features = ["defmt"] }
 rand_core = "0.6.4"
 replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
-embedded-tls = { version = "0.17.0", default-features = false, features = ["defmt"], optional = true }
+embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", default-features = false, features = ["defmt"], optional = true }
 embedded-io-async = "0.6.1"
 futures-util = { version = "0.3.31", default-features = false }
 diatomic-waker = { version = "0.2.3", default-features = false }
@@ -39,8 +39,8 @@ opt-level = 's'
 opt-level = 1
 
 [features]
-default = ["qemu"]
-# default = ["qemu", "tls"]
+# default = ["qemu"]
+default = ["qemu", "tls"]
 # default = ["ra6m3"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra6m3"]

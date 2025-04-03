@@ -49,7 +49,7 @@ pub enum AcceptError {
     ConnectionReset,
 }
 
-struct SocketInner<R: NetMutex> {
+pub(crate) struct SocketInner<R: NetMutex> {
     net: TokenProvider<R>,
     handle: SocketHandle,
 }
@@ -391,6 +391,10 @@ impl<M: NetMutex> TcpSocket<M> {
         }
     }
 
+    pub fn destruct(self) -> (TokenProvider<M>, SocketHandle) {
+        (self.io.net, self.io.handle)
+    }
+
     /// Return the maximum number of bytes inside the recv buffer.
     pub fn recv_capacity(&self) -> usize {
         self.io.recv_capacity()
@@ -684,6 +688,17 @@ impl<M: NetMutex> TcpSocket<M> {
     }
 }
 
+impl<M: NetMutex> From<SocketInner<M>> for TcpSocket<M> {
+    fn from(io: SocketInner<M>) -> Self {
+        Self { io }
+    }
+}
+impl<M: NetMutex> From<TcpSocket<M>> for SocketInner<M> {
+    fn from(this: TcpSocket<M>) -> Self {
+        this.io
+    }
+}
+
 mod embedded_io_impls {
     use super::*;
 
@@ -706,8 +721,24 @@ mod embedded_io_impls {
         }
     }
 
+    impl<M: NetMutex> embedded_io_async::ErrorType for SocketInner<M> {
+        type Error = Error;
+    }
+
     impl<M: NetMutex> embedded_io_async::ErrorType for TcpSocket<M> {
         type Error = Error;
+    }
+
+    impl<M: NetMutex> embedded_io_async::Read for SocketInner<M> {
+        async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+            self.read(buf).await
+        }
+    }
+
+    impl<M: NetMutex> embedded_io_async::Write for SocketInner<M> {
+        async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+            self.write(buf).await
+        }
     }
 
     impl<M: NetMutex> embedded_io_async::Read for TcpSocket<M> {

@@ -1,5 +1,4 @@
 #[cfg(feature = "tls")]
-compile_error!("TODO: mqtt with tls");
 /*
 TOOD TLS:
 
@@ -32,13 +31,19 @@ let socket = {
 };
 
 */
+
+const CAP: usize = 8;
+
 use core::{
+    future::poll_fn,
     net::SocketAddr,
     pin::{Pin, pin},
     task::{Context, Poll, Waker},
 };
 
 use embedded_nal::{TcpClientStack, TcpError, nb};
+use embedded_tls::{TlsContext, UnsecureProvider};
+use heapless::spsc::{Consumer, Producer};
 use rtic_monotonics::{
     Monotonic,
     fugit::{ExtU32, Instant},
@@ -51,7 +56,10 @@ use crate::{
     socket::{self, TcpSocket},
 };
 
-use super::NetLock;
+use super::{
+    NetLock,
+    tls_socket::{Rng, TlsSocket},
+};
 
 const MQTT_CLIENT_PORT: u16 = 58737;
 const RECONNECT_INTERVAL_MS: u32 = 2_000;
@@ -59,7 +67,14 @@ const RECONNECT_INTERVAL_MS: u32 = 2_000;
 // type ConnectFut = impl Future<Output = (TcpSocket<NetLock>, Result<(), socket::ConnectError>)>;
 type ConnectFut =
     stackfuture::StackFuture<'static, (TcpSocket<NetLock>, Result<(), socket::ConnectError>), 120>;
+
 pub type WaiterFut = impl Future<Output = ()> + 'static;
+
+pub struct TlsArgs<'a> {
+    pub tls_rx: &'a mut [u8],
+    pub tls_tx: &'a mut [u8],
+    pub config: embedded_tls::TlsConfig<'a>,
+}
 
 pub struct Broker(pub SocketAddr);
 
@@ -78,6 +93,7 @@ pub struct EmbeddedNalAdapter {
     connect_future: Pin<&'static mut Option<ConnectFut>>,
     waiter_future: Pin<&'static mut Option<WaiterFut>>,
     socket: Option<TcpSocket<NetLock>>,
+    tls: Option<TlsArgs<'static>>,
 }
 
 #[derive(PartialEq, Debug, defmt::Format)]
@@ -87,6 +103,18 @@ pub enum NetError {
     ConnectError(socket::ConnectError),
     SendError(socket::Error),
     RecvError(socket::Error),
+}
+
+enum AdapterMessageIn {
+    Connect(SocketHandle, SocketAddr),
+    Close(SocketHandle),
+    Socket,
+    WithConnection(fn(Option<&mut TcpSocket<NetLock>>, Option<&mut TlsSocket<'_, NetLock>>)),
+}
+
+enum AdapterMessageOut {
+    Connected,
+    Socket(Option<()>),
 }
 
 impl minimq::Broker for Broker {
@@ -99,12 +127,99 @@ impl minimq::Broker for Broker {
     }
 }
 
+async fn handle_tls_session(
+    net: TokenProvider<NetLock>,
+    handle: SocketHandle,
+    tls: &mut TlsArgs<'static>,
+    rx: &mut Consumer<'static, AdapterMessageIn, CAP>,
+    tx: &mut Producer<'static, AdapterMessageOut, CAP>,
+) {
+    let mut rng = Rng;
+    let tcp_socket = TcpSocket::new(net, handle);
+    let ctx = TlsContext::new(&tls.config, UnsecureProvider::new(&mut rng));
+    let mut tls_socket = TlsSocket::new(tcp_socket, tls.tls_rx, tls.tls_tx);
+
+    tls_socket.open(ctx).await.unwrap();
+
+    tx.enqueue(AdapterMessageOut::Connected);
+
+    loop {
+        match dequeue(rx).await {
+            AdapterMessageIn::Connect(_, _) => {}
+            AdapterMessageIn::Close(_) => {
+                tls_socket.close().await.unwrap();
+                return;
+            }
+            AdapterMessageIn::WithConnection(f) => f(None, Some(&mut tls_socket)),
+            AdapterMessageIn::Socket => _ = tx.enqueue(AdapterMessageOut::Socket(None)),
+        }
+    }
+}
+
+async fn dequeue(rx: &mut Consumer<'static, AdapterMessageIn, CAP>) -> AdapterMessageIn {
+    poll_fn(|_| match rx.dequeue() {
+        Some(v) => Poll::Ready(v),
+        None => Poll::Pending,
+    })
+    .await
+}
+
+async fn adapter_task(
+    net: TokenProvider<NetLock>,
+    handle: SocketHandle,
+    mut tls: Option<TlsArgs<'static>>,
+    mut rx: Consumer<'static, AdapterMessageIn, CAP>,
+    mut tx: Producer<'static, AdapterMessageOut, CAP>,
+) -> ! {
+    let mut connected = false;
+    let mut tcp_socket = TcpSocket::new(net, handle);
+    let mut port_shift = core::num::Wrapping::<u8>(0);
+    let mut last_connection_attempt: Option<Instant<u32, 1, 1000>> = None;
+
+    loop {
+        match dequeue(&mut rx).await {
+            AdapterMessageIn::Connect(_, socket_addr) => {
+                if let Some(last) = last_connection_attempt {
+                    if let Some(diff) = Mono::now().checked_duration_since(last) {
+                        if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
+                            Mono::delay_until(last + RECONNECT_INTERVAL_MS.millis()).await;
+                        }
+                    }
+                }
+
+                last_connection_attempt = Some(Mono::now());
+                let port = MQTT_CLIENT_PORT + port_shift.0 as u16;
+                tcp_socket.connect(socket_addr, port).await;
+
+                if let Some(tls) = tls.as_mut() {
+                    handle_tls_session(net, handle, tls, &mut rx, &mut tx).await;
+                } else {
+                    connected = true;
+                    tx.enqueue(AdapterMessageOut::Connected);
+                }
+
+                port_shift += 1;
+            }
+            AdapterMessageIn::WithConnection(f) if connected => f(Some(&mut tcp_socket), None),
+            AdapterMessageIn::WithConnection(f) => f(None, None),
+            AdapterMessageIn::Close(_socket_handle) => {
+                tcp_socket.disconnect().await;
+                connected = false;
+            }
+            AdapterMessageIn::Socket => {
+                _ = tx.enqueue(AdapterMessageOut::Socket((!connected).then_some(())));
+            }
+        }
+    }
+}
+
 impl EmbeddedNalAdapter {
     pub const fn new(
         net: TokenProvider<NetLock>,
         handle: SocketHandle,
         alloc: &'static mut MqttAlocation,
         waker: Waker,
+        tls: Option<TlsArgs<'static>>,
     ) -> Self {
         let socket = Some(TcpSocket::new(net, handle));
         let connect_future = Pin::static_mut(&mut alloc.connect_future_place);
@@ -120,6 +235,7 @@ impl EmbeddedNalAdapter {
             connect_future,
             waiter_future,
             socket,
+            tls,
         }
     }
 
