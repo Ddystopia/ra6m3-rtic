@@ -14,7 +14,7 @@ type TlsWriter<'a, M> = embedded_tls::TlsWriter<'a, SocketInner<M>, Aes128GcmSha
 
 pub struct Rng;
 
-pub(crate) struct TlsSocket<'a, M: Mutex<T = Net> + 'static>(TlsConnection<'a, M>);
+pub(crate) struct TlsSocket<'a, M: Mutex<T = Net> + 'static>(pub TlsConnection<'a, M>);
 
 impl CryptoRng for Rng {}
 

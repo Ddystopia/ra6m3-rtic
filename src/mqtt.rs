@@ -5,13 +5,18 @@ use crate::{
     poll_share::{self, TokenProvider},
     socket::{self},
 };
-use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError};
+use adapter::{TlsArgs, Broker, EmbeddedNalAdapter, MqttAlocation, NetError};
 use minimq::{ConfigBuilder, Publication};
 use rtic_monotonics::{
     Monotonic,
     fugit::{self, ExtU32},
 };
 use smoltcp::iface::SocketHandle;
+
+#[cfg(feature = "tls")]
+const TLS_TX_SIZE: usize = 13_640;
+#[cfg(feature = "tls")]
+const TLS_RX_SIZE: usize = 16_640;
 
 mod adapter;
 #[cfg(feature = "tls")]
@@ -47,6 +52,8 @@ pub struct Mqtt<
     net: TokenProvider<NetLock>,
     waker: Waker,
     alloc: Option<&'static mut MqttAlocation>,
+    #[cfg_attr(not(feature = "tls"), expect(dead_code))]
+    tls: Option<TlsArgs<'static>>,
 }
 
 pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
@@ -62,6 +69,10 @@ pub struct Storage {
     pub mqtt: Option<Mqtt<OnMessage>>,
     pub token_place: poll_share::TokenProviderPlace<NetLock>,
     pub alloc: MqttAlocation,
+    #[cfg(feature = "tls")]
+    pub tls_tx: [u8; TLS_TX_SIZE],
+    #[cfg(feature = "tls")]
+    pub tls_rx: [u8; TLS_RX_SIZE],
 }
 
 impl Storage {
@@ -71,6 +82,10 @@ impl Storage {
             buffer: [0; MQTT_BUFFER_SIZE],
             alloc: MqttAlocation::new(),
             token_place: poll_share::TokenProviderPlace::new(),
+            #[cfg(feature = "tls")]
+            tls_tx: [0; TLS_TX_SIZE],
+            #[cfg(feature = "tls")]
+            tls_rx: [0; TLS_RX_SIZE],
         }
     }
 }
@@ -91,6 +106,7 @@ where
         waker: Waker,
         alloc: &'static mut MqttAlocation,
         on_message: F,
+        tls: Option<TlsArgs<'static>>,
     ) -> Self {
         Self {
             minimq: None,
@@ -100,14 +116,21 @@ where
             waker,
             on_message,
             alloc: Some(alloc),
+            tls,
         }
     }
 
     fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
             let alloc = self.alloc.take().unwrap();
-            let adapter =
-                EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone(), None);
+            let adapter = EmbeddedNalAdapter::new(
+                self.net,
+                self.socket,
+                alloc,
+                self.waker.clone(),
+                #[cfg(feature = "tls")]
+                None,
+            );
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         })
     }
@@ -115,8 +138,16 @@ where
     pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<NetError>>> {
         let minimq = self.minimq.get_or_insert_with(|| {
             let alloc = self.alloc.take().unwrap();
-            let adapter =
-                EmbeddedNalAdapter::new(self.net, self.socket, alloc, self.waker.clone(), None);
+            #[cfg(feature = "tls")]
+            let tls = self.tls.take();
+            let adapter = EmbeddedNalAdapter::new(
+                self.net,
+                self.socket,
+                alloc,
+                self.waker.clone(),
+                #[cfg(feature = "tls")]
+                tls,
+            );
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         });
 
@@ -211,6 +242,16 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
     let conf = conf.keepalive_interval(keepalive_interval.to_secs() as u16);
     let callback = on_message();
+
+    #[cfg(feature = "tls")]
+    let tls = Some(TlsArgs {
+        tls_rx: &mut storage.tls_rx,
+        tls_tx: &mut storage.tls_tx,
+        config: embedded_tls::TlsConfig::new().with_server_name("example.com"),
+    });
+    #[cfg(not(feature = "tls"))]
+    let tls = None;
+
     let mqtt = Mqtt::new(
         socket_handle,
         conf,
@@ -218,6 +259,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
         waker,
         &mut storage.alloc,
         callback,
+        tls,
     );
     let mqtt = storage.mqtt.get_or_insert(mqtt);
 
@@ -228,7 +270,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
             defmt::info!("Subscribed to topics");
             mqtt.join(keepalive_interval).await?
         } {
-            Err(minimq::Error::Network(NetError::ConnectError(
+            Err(minimq::Error::Network(NetError::TcpConnectError(
                 socket::ConnectError::ConnectionReset,
             ))) => {
                 defmt::info!("Failed to connect to broker, retrying...");
