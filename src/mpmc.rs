@@ -1,9 +1,7 @@
 #![allow(dead_code)]
 
-use core::{future::poll_fn, pin::pin};
-
 use heapless::mpmc::MpMcQueue;
-use rtic_common::wait_queue::{Link, WaitQueue};
+use rtic_common::wait_queue::WaitQueue;
 
 // todo: maybe write it without `!Forget` assumption by requiring providing an allocation?
 
@@ -31,96 +29,34 @@ impl<T, const N: usize> MpMcChannel<T, N> {
     }
 
     pub fn try_send(&self, value: T) -> Result<(), T> {
-        self.queue.enqueue(value)?;
-
-        if let Some(waker) = self.rx_wait_queue.pop() {
+        while let Some(waker) = self.rx_wait_queue.pop() {
             waker.wake();
         }
 
-        Ok(())
+        self.queue.enqueue(value)
     }
 
     pub fn try_recv(&self) -> Option<T> {
-        let val = self.queue.dequeue()?;
-        if let Some(waker) = self.tx_wait_queue.pop() {
+        while let Some(waker) = self.rx_wait_queue.pop() {
             waker.wake();
         }
-        Some(val)
+
+        self.queue.dequeue()
     }
 
     pub async fn send(&self, value: T) {
         let mut value = Some(value);
-
-        let link = pin!(None::<Link<_>>);
-        let mut link = OnDrop::new(link, |link| {
-            if let Some(link) = link.as_mut().as_pin_mut() {
-                link.as_ref()
-                    .get_ref()
-                    .remove_from_list(&self.tx_wait_queue);
-            }
-        });
-
-        poll_fn(|cx| match self.try_send(value.take().unwrap()) {
-            Ok(()) => {
-                link.0.set(None);
-                core::task::Poll::Ready(())
-            }
-            Err(old_val) => {
-                let new_link = Link::new(cx.waker().clone());
-                link.0.set(Some(new_link));
-
-                if let Some(link) = link.0.as_ref().as_pin_ref() {
-                    // SAFETY: codebase assumes that drop handler is always called
-                    unsafe {
-                        self.tx_wait_queue.push(link);
-                    }
-                }
-                value = Some(old_val);
-                core::task::Poll::Pending
-            }
-        })
-        .await
+        self.tx_wait_queue
+            .wait_until(|| {
+                self.try_send(value.take().expect("Future is polled after completion"))
+                    .map_err(|old_val| value = Some(old_val))
+                    .ok()
+            })
+            .await
     }
 
     pub async fn recv(&self) -> T {
-        let link = pin!(None::<Link<_>>);
-        let mut link = OnDrop::new(link, |link| {
-            if let Some(link) = link.as_mut().as_pin_mut() {
-                link.as_ref()
-                    .get_ref()
-                    .remove_from_list(&self.rx_wait_queue);
-            }
-        });
-
-        poll_fn(|cx| match self.try_recv() {
-            Some(value) => {
-                if let Some(link) = link.0.as_mut().as_pin_mut() {
-                    link.as_ref()
-                        .get_ref()
-                        .remove_from_list(&self.rx_wait_queue);
-                }
-                link.0.set(None);
-                core::task::Poll::Ready(value)
-            }
-            None => {
-                let new_link = Link::new(cx.waker().clone());
-                link.0.set(Some(new_link));
-
-                if let Some(link) = link.0.as_ref().as_pin_ref() {
-                    link.remove_from_list(&self.tx_wait_queue);
-
-                    // SAFETY: Clean up will be performed eigher in the
-                    // - Drop handler of the future
-                    // - Before new link replaced
-                    // - When ready
-                    unsafe {
-                        self.rx_wait_queue.push(link);
-                    }
-                }
-                core::task::Poll::Pending
-            }
-        })
-        .await
+        self.rx_wait_queue.wait_until(|| self.try_recv()).await
     }
 }
 

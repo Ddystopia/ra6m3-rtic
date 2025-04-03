@@ -1203,7 +1203,7 @@ dependencies = [
  "rand_core",
  "replace_with",
  "rtic",
- "rtic-common",
+ "rtic-common 1.0.1",
  "rtic-monotonics",
  "smoltcp",
  "stackfuture",
@@ -1293,6 +1293,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtic-common"
+version = "1.0.1"
+dependencies = [
+ "critical-section",
+ "portable-atomic 1.11.0",
+]
+
+[[package]]
 name = "rtic-core"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1334,7 +1342,7 @@ dependencies = [
  "embedded-hal-async",
  "fugit",
  "futures-util",
- "rtic-common",
+ "rtic-common 1.0.0",
 ]
 
 [[package]]

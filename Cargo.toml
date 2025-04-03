@@ -11,6 +11,8 @@ ra6m3 = { path = "/home/ddystopia/job/ra/pac/ra6m3", features = ["rt"], optional
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
 rtic = { git = "https://github.com/rtic-rs/rtic", features = ["thumbv7-backend"] }
+# rtic-common = "1.0.0"
+rtic-common = { path = "/home/ddystopia/code/clones/rtic/rtic-common/" }
 defmt = { version = "0.3.8", features = ["encoding-rzcobs"] }
 # defmt = { version = "0.3.8", features = ["encoding-raw"] }
 rtic-monotonics = { version = "2.0.3", features = ["cortex-m-systick"] }
@@ -34,7 +36,6 @@ diatomic-waker = { version = "0.2.3", default-features = false }
 # futures-concurrency = { version = "7.6.3", default-features = false, features = [] }
 # they are not disabling futures-buffered when no alloc feature provided
 futures-concurrency = { path = "/home/ddystopia/code/futures-concurrency/", default-features = false, features = [] }
-rtic-common = "1.0.0"
 
 [profile.release]
 opt-level = 's'
