@@ -1,6 +1,5 @@
-const CAP: usize = 8;
-
 use core::{
+    cell::Cell,
     future::poll_fn,
     net::SocketAddr,
     pin::{Pin, pin},
@@ -10,7 +9,6 @@ use core::{
 use embedded_nal::{TcpClientStack, TcpError, nb};
 #[cfg(feature = "tls")]
 use embedded_tls::{TlsContext, TlsError, UnsecureProvider};
-use heapless::spsc::{Consumer, Producer};
 use rtic_monotonics::{
     Monotonic,
     fugit::{ExtU32, Instant},
@@ -46,8 +44,8 @@ pub struct Broker(pub SocketAddr);
 
 pub struct MqttAlocation {
     future_place: Option<AdapterFut>,
-    tx_queue: heapless::spsc::Queue<AdapterMessageIn, CAP>,
-    rx_queue: heapless::spsc::Queue<AdapterMessageOut, CAP>,
+    tx_queue: Cell<Option<AdapterMessageIn>>,
+    rx_queue: Cell<Option<AdapterMessageOut>>,
 }
 
 pub struct EmbeddedNalAdapter {
@@ -55,12 +53,11 @@ pub struct EmbeddedNalAdapter {
     net: TokenProvider<NetLock>,
     waker: Waker,
     fut: Pin<&'static mut AdapterFut>,
-    tx: Producer<'static, AdapterMessageIn, CAP>,
-    rx: Consumer<'static, AdapterMessageOut, CAP>,
-    waiting_for_pong: bool,
+    tx: &'static Cell<Option<AdapterMessageIn>>,
+    rx: &'static Cell<Option<AdapterMessageOut>>,
 }
 
-#[derive(Debug, defmt::Format)]
+#[derive(PartialEq, Debug, defmt::Format)]
 pub enum Error {
     TcpError(socket::Error),
     #[cfg(feature = "tls")]
@@ -83,14 +80,14 @@ enum AdapterMessageIn {
     Connect(SocketAddr),
     Read(&'static mut [u8]),
     Write(&'static [u8]),
-    Close(SocketHandle),
+    Close,
     Socket,
     Ping,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum AdapterMessageOut {
-    Connected,
+    Connect(Poll<()>),
     Closing,
     Socket(Option<()>),
     Read(Option<Result<usize, Error>>, &'static mut [u8]),
@@ -108,8 +105,8 @@ impl minimq::Broker for Broker {
     }
 }
 
-async fn dequeue(rx: &mut Consumer<'static, AdapterMessageIn, CAP>) -> AdapterMessageIn {
-    poll_fn(|_| match rx.dequeue() {
+async fn dequeue(rx: &Cell<Option<AdapterMessageIn>>) -> AdapterMessageIn {
+    poll_fn(|_| match rx.take() {
         Some(v) => Poll::Ready(v),
         None => Poll::Pending,
     })
@@ -121,8 +118,8 @@ async fn handle_tls_session(
     net: TokenProvider<NetLock>,
     handle: SocketHandle,
     tls: &mut TlsArgs<'static>,
-    rx: &mut Consumer<'static, AdapterMessageIn, CAP>,
-    tx: &mut Producer<'static, AdapterMessageOut, CAP>,
+    rx: &'static Cell<Option<AdapterMessageIn>>,
+    tx: &'static Cell<Option<AdapterMessageOut>>,
 ) {
     let mut rng = Rng;
     let tcp_socket = TcpSocket::new(net, handle);
@@ -131,11 +128,11 @@ async fn handle_tls_session(
 
     tls_socket.open(ctx).await.unwrap();
 
-    tx.enqueue(AdapterMessageOut::Connected).unwrap();
+    tx.set(Some(AdapterMessageOut::Connected));
 
     loop {
         match dequeue(rx).await {
-            AdapterMessageIn::Connect(_) => {}
+            AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
                     let mut read_fut = pin!(tls_socket.0.read(buffer));
@@ -144,7 +141,7 @@ async fn handle_tls_session(
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
                     Poll::Pending => None,
                 };
-                tx.enqueue(AdapterMessageOut::Read(result, buffer)).unwrap();
+                tx.set(Some(AdapterMessageOut::Read(result, buffer)));
             }
             AdapterMessageIn::Write(buffer) => {
                 let result = match {
@@ -154,16 +151,15 @@ async fn handle_tls_session(
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
                     Poll::Pending => None,
                 };
-                tx.enqueue(AdapterMessageOut::Write(result, buffer))
-                    .unwrap();
+                tx.set(Some(AdapterMessageOut::Write(result, buffer)));
             }
             AdapterMessageIn::Close(_) => {
-                tx.enqueue(AdapterMessageOut::Closing).unwrap();
+                tx.set(Some(AdapterMessageOut::Closing));
                 tls_socket.close().await.unwrap();
                 return;
             }
-            AdapterMessageIn::Socket => _ = tx.enqueue(AdapterMessageOut::Socket(None)).unwrap(),
-            AdapterMessageIn::Ping => _ = tx.enqueue(AdapterMessageOut::Pong).unwrap(),
+            AdapterMessageIn::Socket => _ = tx.set(Some(AdapterMessageOut::Socket(None))),
+            AdapterMessageIn::Ping => _ = tx.set(Some(AdapterMessageOut::Pong)),
         }
     }
 }
@@ -172,8 +168,8 @@ async fn adapter_task(
     net: TokenProvider<NetLock>,
     handle: SocketHandle,
     #[cfg(feature = "tls")] mut tls: Option<TlsArgs<'static>>,
-    mut rx: Consumer<'static, AdapterMessageIn, CAP>,
-    mut tx: Producer<'static, AdapterMessageOut, CAP>,
+    rx: &'static Cell<Option<AdapterMessageIn>>,
+    tx: &'static Cell<Option<AdapterMessageOut>>,
 ) -> ! {
     let mut connected = false;
     let mut tcp_socket = TcpSocket::new(net, handle);
@@ -181,8 +177,11 @@ async fn adapter_task(
     let mut last_connection_attempt: Option<Instant<u32, 1, 1000>> = None;
 
     loop {
-        match dequeue(&mut rx).await {
+        match dequeue(rx).await {
+            AdapterMessageIn::Connect(_) if connected => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Connect(socket_addr) => {
+                tx.set(Some(AdapterMessageOut::Connect(Poll::Pending)));
+
                 if let Some(last) = last_connection_attempt {
                     if let Some(diff) = Mono::now().checked_duration_since(last) {
                         if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
@@ -193,6 +192,7 @@ async fn adapter_task(
 
                 last_connection_attempt = Some(Mono::now());
                 let port = MQTT_CLIENT_PORT + port_shift.0 as u16;
+
                 tcp_socket.connect(socket_addr, port).await.expect("todo");
 
                 #[cfg(feature = "tls")]
@@ -200,12 +200,12 @@ async fn adapter_task(
                     handle_tls_session(net, handle, tls, &mut rx, &mut tx).await;
                 } else {
                     connected = true;
-                    tx.enqueue(AdapterMessageOut::Connected).unwrap();
+                    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(()))));
                 }
                 #[cfg(not(feature = "tls"))]
                 {
                     connected = true;
-                    tx.enqueue(AdapterMessageOut::Connected).unwrap();
+                    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(()))));
                 }
 
                 port_shift += 1;
@@ -218,7 +218,7 @@ async fn adapter_task(
                     Poll::Ready(result) => Some(result.map_err(Error::TcpError)),
                     Poll::Pending => None,
                 };
-                tx.enqueue(AdapterMessageOut::Read(result, buffer)).unwrap();
+                tx.set(Some(AdapterMessageOut::Read(result, buffer)));
             }
             AdapterMessageIn::Write(buffer) => {
                 let result = match {
@@ -228,20 +228,17 @@ async fn adapter_task(
                     Poll::Ready(result) => Some(result.map_err(Error::TcpError)),
                     Poll::Pending => None,
                 };
-                tx.enqueue(AdapterMessageOut::Write(result, buffer))
-                    .unwrap();
+                tx.set(Some(AdapterMessageOut::Write(result, buffer)));
             }
-            AdapterMessageIn::Close(_socket_handle) => {
-                tx.enqueue(AdapterMessageOut::Closing).unwrap();
+            AdapterMessageIn::Close => {
+                tx.set(Some(AdapterMessageOut::Closing));
                 tcp_socket.disconnect().await;
                 connected = false;
             }
             AdapterMessageIn::Socket => {
-                _ = tx
-                    .enqueue(AdapterMessageOut::Socket((!connected).then_some(())))
-                    .unwrap();
+                tx.set(Some(AdapterMessageOut::Socket((!connected).then_some(()))))
             }
-            AdapterMessageIn::Ping => _ = tx.enqueue(AdapterMessageOut::Pong).unwrap(),
+            AdapterMessageIn::Ping => tx.set(Some(AdapterMessageOut::Pong)),
         }
     }
 }
@@ -255,8 +252,8 @@ impl EmbeddedNalAdapter {
         waker: Waker,
         #[cfg(feature = "tls")] tls: Option<TlsArgs<'static>>,
     ) -> Self {
-        let (tx_tx, tx_rx) = alloc.tx_queue.split();
-        let (rx_tx, rx_rx) = alloc.rx_queue.split();
+        let tx_tx @ tx_rx = &alloc.tx_queue;
+        let rx_tx @ rx_rx = &alloc.rx_queue;
 
         let fut = adapter_task(
             net,
@@ -270,7 +267,6 @@ impl EmbeddedNalAdapter {
 
         Self {
             socket_handle: handle,
-            waiting_for_pong: false,
             net,
             waker,
             tx: tx_tx,
@@ -287,37 +283,41 @@ impl EmbeddedNalAdapter {
         });
     }
 
-    fn message(&mut self, msg: AdapterMessageIn) -> Option<AdapterMessageOut> {
-        while let Some(msg) = self.rx.dequeue() {
-            match msg {
-                AdapterMessageOut::Pong => self.waiting_for_pong = false,
-                other => return Some(other),
+    fn message(&mut self, msg: AdapterMessageIn) -> Poll<AdapterMessageOut> {
+        match (self.tx.take(), self.rx.take()) {
+            (ping @ Some(AdapterMessageIn::Ping), None) => {
+                self.tx.set(ping);
+                return Poll::Pending;
             }
-        }
+            (close @ Some(AdapterMessageIn::Close), None) => {
+                self.tx.set(close);
+                return Poll::Pending;
+            }
+            (Some(AdapterMessageIn::Close), Some(out)) => {
+                assert_eq!(out, AdapterMessageOut::Closing)
+            }
+            (None, Some(AdapterMessageOut::Pong) | None) => (),
 
-        if self.waiting_for_pong {
-            return None;
+            _ => unreachable!(),
         }
 
         let mut ctx = Context::from_waker(&self.waker);
 
-        self.tx.enqueue(AdapterMessageIn::Ping).unwrap();
-        _ = self.fut.as_mut().poll(&mut ctx);
+        // assert that actor is not waiting.
+        {
+            self.tx.set(Some(AdapterMessageIn::Ping));
+            _ = self.fut.as_mut().poll(&mut ctx);
 
-        match self.rx.dequeue() {
-            Some(AdapterMessageOut::Pong) => (),
-            Some(_other) => unreachable!(),
-            None => {
-                self.waiting_for_pong = true;
-                return None;
+            match self.rx.take() {
+                Some(AdapterMessageOut::Pong) => (),
+                Some(_other) => unreachable!(),
+                None => return Poll::Pending,
             }
         }
 
-        self.tx.enqueue(msg).unwrap();
-
+        self.tx.set(Some(msg));
         _ = self.fut.as_mut().poll(&mut ctx);
-
-        self.rx.dequeue()
+        Poll::Ready(self.rx.take().unwrap())
     }
 }
 
@@ -328,7 +328,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
 
     fn socket(&mut self) -> Result<Self::TcpSocket, Self::Error> {
         match self.message(AdapterMessageIn::Socket) {
-            Some(AdapterMessageOut::Socket(Some(()))) => Ok(self.socket_handle),
+            Poll::Ready(AdapterMessageOut::Socket(Some(()))) => Ok(self.socket_handle),
             _ => Err(NetError::SocketUsed),
         }
     }
@@ -341,7 +341,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
     ) -> nb::Result<(), Self::Error> {
         defmt::debug!("Connecting to {:?}", remote);
         match self.message(AdapterMessageIn::Connect(remote)) {
-            Some(AdapterMessageOut::Connected) => Ok(()),
+            Poll::Ready(AdapterMessageOut::Connect(Poll::Ready(()))) => Ok(()),
             _ => Err(nb::Error::WouldBlock),
         }
     }
@@ -362,20 +362,23 @@ impl TcpClientStack for EmbeddedNalAdapter {
 
         let ptr = buffer.as_ptr();
 
-        match self.message(AdapterMessageIn::Write(buffer)) {
-            Some(AdapterMessageOut::Write(Some(Ok(len)), b)) => {
+        let Poll::Ready(message) = self.message(AdapterMessageIn::Write(buffer)) else {
+            return Err(nb::Error::WouldBlock);
+        };
+
+        match message {
+            AdapterMessageOut::Write(Some(Ok(len)), b) => {
                 assert_eq!(b.as_ptr(), ptr);
                 Ok(len)
             }
-            Some(AdapterMessageOut::Write(Some(Err(err)), b)) => {
+            AdapterMessageOut::Write(Some(Err(err)), b) => {
                 assert_eq!(b.as_ptr(), ptr);
                 Err(nb::Error::Other(NetError::SendError(err)))
             }
-            Some(AdapterMessageOut::Write(None, b)) => {
+            AdapterMessageOut::Write(None, b) => {
                 assert_eq!(b.as_ptr(), ptr);
                 Err(nb::Error::WouldBlock)
             }
-            None => Err(nb::Error::WouldBlock),
             _ => unreachable!(),
         }
     }
@@ -393,35 +396,36 @@ impl TcpClientStack for EmbeddedNalAdapter {
         let buffer = unsafe { &mut *core::ptr::from_mut(buffer) };
         let ptr = buffer.as_mut_ptr();
 
-        match self.message(AdapterMessageIn::Read(buffer)) {
-            Some(AdapterMessageOut::Read(Some(Ok(0)), b)) => {
+        let Poll::Ready(message) = self.message(AdapterMessageIn::Read(buffer)) else {
+            return Err(nb::Error::WouldBlock);
+        };
+
+        match message {
+            AdapterMessageOut::Read(Some(Ok(0)), b) => {
                 assert_eq!(b.as_mut_ptr(), ptr);
                 Err(nb::Error::Other(NetError::PipeClosed))
             }
-            Some(AdapterMessageOut::Read(Some(Ok(len)), b)) => {
+            AdapterMessageOut::Read(Some(Ok(len)), b) => {
                 assert_eq!(b.as_mut_ptr(), ptr);
                 self.setup_wakers(handle);
                 Ok(len)
             }
-            Some(AdapterMessageOut::Read(Some(Err(e)), b)) => {
+            AdapterMessageOut::Read(Some(Err(e)), b) => {
                 assert_eq!(b.as_mut_ptr(), ptr);
                 Err(nb::Error::Other(NetError::RecvError(e)))
             }
-            Some(AdapterMessageOut::Read(None, b)) => {
+            AdapterMessageOut::Read(None, b) => {
                 assert_eq!(b.as_mut_ptr(), ptr);
                 Err(nb::Error::WouldBlock)
             }
-            None => Err(nb::Error::WouldBlock),
             _ => unreachable!(),
         }
     }
 
-    fn close(&mut self, handle: Self::TcpSocket) -> Result<(), Self::Error> {
+    fn close(&mut self, _handle: Self::TcpSocket) -> Result<(), Self::Error> {
         defmt::info!("Closing socket");
-        match self.message(AdapterMessageIn::Close(handle)) {
-            Some(AdapterMessageOut::Closing) => Ok(()),
-            _ => unreachable!(),
-        }
+        _ = self.message(AdapterMessageIn::Close);
+        Ok(())
     }
 }
 
@@ -445,8 +449,8 @@ impl MqttAlocation {
     pub const fn new() -> Self {
         Self {
             future_place: None,
-            tx_queue: heapless::spsc::Queue::new(),
-            rx_queue: heapless::spsc::Queue::new(),
+            tx_queue: Cell::new(None),
+            rx_queue: Cell::new(None),
         }
     }
 }
