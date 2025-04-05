@@ -24,12 +24,13 @@ heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"
 atomic_refcell = "0.1.13"
 static_cell = "2.1.0"
 picoserve = { version = "0.15.0", features = ["defmt"] }
-rand_core = "0.6.4"
 replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
+# embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", rev = "c0a0bb886a85505b760a9fbb2826d73c540372bc", default-features = false, features = ["defmt"], optional = true }
 embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", default-features = false, features = ["defmt"], optional = true }
 embedded-io-async = "0.6.1"
 futures-util = { version = "0.3.31", default-features = false }
 diatomic-waker = { version = "0.2.3", default-features = false }
+rand_chacha = { version = "0.3.1", default-features = false }
 
 [profile.release]
 opt-level = 's'

@@ -5,7 +5,7 @@ use crate::{
     poll_share::{self, TokenProvider},
     socket::{self},
 };
-use adapter::{TlsArgs, Broker, EmbeddedNalAdapter, MqttAlocation, NetError};
+use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError, TlsArgs};
 use minimq::{ConfigBuilder, Publication};
 use rtic_monotonics::{
     Monotonic,
@@ -14,7 +14,7 @@ use rtic_monotonics::{
 use smoltcp::iface::SocketHandle;
 
 #[cfg(feature = "tls")]
-const TLS_TX_SIZE: usize = 13_640;
+const TLS_TX_SIZE: usize = 16_640;
 #[cfg(feature = "tls")]
 const TLS_RX_SIZE: usize = 16_640;
 
@@ -247,7 +247,9 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     let tls = Some(TlsArgs {
         tls_rx: &mut storage.tls_rx,
         tls_tx: &mut storage.tls_tx,
-        config: embedded_tls::TlsConfig::new().with_server_name("example.com"),
+        config: embedded_tls::TlsConfig::new()
+            .with_server_name("example.com")
+            .enable_rsa_signatures(),
     });
     #[cfg(not(feature = "tls"))]
     let tls = None;

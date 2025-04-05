@@ -63,14 +63,15 @@ tasks:
       PROFILE: '{{ default "-" .PROFILE }}'
       TARGET:
         sh: awk -F "=" '/^target/ { gsub(/"/, "", $2); print $2 }' .cargo/config.toml | tr -d " "
-      MAC: 
+      MAC:
         sh: awk -F "=" '/^MAC/ { gsub(/"/, "", $2); print $2 }' .cargo/config.toml | tr -d " "
 
     cmds:
       - task: setup-tap
       - cmd: if [ "{{.PROFILE}}" == "-" ]; then echo "PROFILE is not set"; exit 1; fi
         silent: true
-      - qemu-system-arm
+      # - qemu-system-arm
+      - /home/ddystopia/job/qemu/build/qemu-system-arm
         -cpu cortex-m3
         -machine lm3s6965evb
         -display none

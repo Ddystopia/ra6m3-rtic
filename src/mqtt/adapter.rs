@@ -1,3 +1,9 @@
+/*
+
+TLS status: Library reports that handshake is done. Wireshark can't detect that there is
+any TLS handshake.
+*/
+
 use core::{
     cell::Cell,
     future::poll_fn,
@@ -24,9 +30,9 @@ use crate::{
 use super::NetLock;
 
 #[cfg(feature = "tls")]
-use super::tls_socket::{Rng, TlsSocket};
+use super::tls_socket::TlsSocket;
 
-const MQTT_CLIENT_PORT: u16 = 58737;
+const MQTT_CLIENT_PORT: u16 = 58026;
 const RECONNECT_INTERVAL_MS: u32 = 2_000;
 
 type AdapterFut = impl Future<Output = !>;
@@ -57,7 +63,7 @@ pub struct EmbeddedNalAdapter {
     rx: &'static Cell<Option<AdapterMessageOut>>,
 }
 
-#[derive(PartialEq, Debug, defmt::Format)]
+#[derive(Debug, defmt::Format)]
 pub enum Error {
     TcpError(socket::Error),
     #[cfg(feature = "tls")]
@@ -87,7 +93,7 @@ enum AdapterMessageIn {
 
 #[derive(Debug, PartialEq)]
 enum AdapterMessageOut {
-    Connect(Poll<()>),
+    Connect(Poll<Result<(), NetError>>),
     Closing,
     Socket(Option<()>),
     Read(Option<Result<usize, Error>>, &'static mut [u8]),
@@ -121,18 +127,36 @@ async fn handle_tls_session(
     rx: &'static Cell<Option<AdapterMessageIn>>,
     tx: &'static Cell<Option<AdapterMessageOut>>,
 ) {
-    let mut rng = Rng;
+    use rand_chacha::rand_core::SeedableRng;
+
+    let mut rng = rand_chacha::ChaCha12Rng::from_seed([183; 32]);
     let tcp_socket = TcpSocket::new(net, handle);
     let ctx = TlsContext::new(&tls.config, UnsecureProvider::new(&mut rng));
     let mut tls_socket = TlsSocket::new(tcp_socket, tls.tls_rx, tls.tls_tx);
 
-    tls_socket.open(ctx).await.unwrap();
+    defmt::info!("Starting TLS handshake");
 
-    tx.set(Some(AdapterMessageOut::Connected));
+    let result = tls_socket
+        .open(ctx)
+        .await
+        .map_err(NetError::TlsConnectError);
+
+    defmt::info!("TLS handshake done: {}", result.is_ok());
+
+    let is_err = result.is_err();
+
+    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(result))));
+
+    if is_err {
+        return;
+    }
 
     loop {
         match dequeue(rx).await {
-            AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
+            AdapterMessageIn::Connect(_) => {
+                tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(Ok(())))))
+            }
+            // AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
                     let mut read_fut = pin!(tls_socket.0.read(buffer));
@@ -141,9 +165,11 @@ async fn handle_tls_session(
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
                     Poll::Pending => None,
                 };
+                defmt::info!("TLS Read request: fulfilled: {}", result.is_some());
                 tx.set(Some(AdapterMessageOut::Read(result, buffer)));
             }
             AdapterMessageIn::Write(buffer) => {
+                defmt::info!("TLS Write request: buffer: {:?}", buffer);
                 let result = match {
                     let mut read_fut = pin!(tls_socket.0.write(buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
@@ -151,11 +177,16 @@ async fn handle_tls_session(
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
                     Poll::Pending => None,
                 };
+                defmt::info!("TLS Write request: fulfilled: {}", result.is_some());
                 tx.set(Some(AdapterMessageOut::Write(result, buffer)));
             }
-            AdapterMessageIn::Close(_) => {
+            AdapterMessageIn::Close => {
                 tx.set(Some(AdapterMessageOut::Closing));
-                tls_socket.close().await.unwrap();
+                if let Err(err) = tls_socket.close().await {
+                    defmt::error!("TLS close error: {}", err);
+                    let mut tcp_socket = TcpSocket::new(net, handle);
+                    tcp_socket.abort();
+                }
                 return;
             }
             AdapterMessageIn::Socket => _ = tx.set(Some(AdapterMessageOut::Socket(None))),
@@ -182,10 +213,14 @@ async fn adapter_task(
             AdapterMessageIn::Connect(socket_addr) => {
                 tx.set(Some(AdapterMessageOut::Connect(Poll::Pending)));
 
+                defmt::info!("TCP connecting");
+
                 if let Some(last) = last_connection_attempt {
                     if let Some(diff) = Mono::now().checked_duration_since(last) {
                         if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
+                            defmt::info!("TCP connecting -- waiting");
                             Mono::delay_until(last + RECONNECT_INTERVAL_MS.millis()).await;
+                            defmt::info!("TCP connecting -- really connecting");
                         }
                     }
                 }
@@ -193,24 +228,31 @@ async fn adapter_task(
                 last_connection_attempt = Some(Mono::now());
                 let port = MQTT_CLIENT_PORT + port_shift.0 as u16;
 
-                tcp_socket.connect(socket_addr, port).await.expect("todo");
+                let result = tcp_socket
+                    .connect(socket_addr, port)
+                    .await
+                    .map_err(NetError::TcpConnectError);
+
+                defmt::info!("TCP connected: {}", result.is_ok());
 
                 #[cfg(feature = "tls")]
                 if let Some(tls) = tls.as_mut() {
-                    handle_tls_session(net, handle, tls, &mut rx, &mut tx).await;
+                    defmt::info!("TCP connected -> Passing to TLS");
+                    handle_tls_session(net, handle, tls, rx, tx).await;
                 } else {
-                    connected = true;
-                    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(()))));
+                    connected = result.is_ok();
+                    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(result))));
                 }
                 #[cfg(not(feature = "tls"))]
                 {
-                    connected = true;
-                    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(()))));
+                    connected = result.is_ok();
+                    tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(result))));
                 }
 
                 port_shift += 1;
             }
             AdapterMessageIn::Read(buffer) => {
+                defmt::info!("TCP READ request");
                 let result = match {
                     let mut read_fut = pin!(tcp_socket.read(buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
@@ -221,6 +263,7 @@ async fn adapter_task(
                 tx.set(Some(AdapterMessageOut::Read(result, buffer)));
             }
             AdapterMessageIn::Write(buffer) => {
+                defmt::info!("TCP Write request");
                 let result = match {
                     let mut read_fut = pin!(tcp_socket.write(buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
@@ -341,7 +384,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
     ) -> nb::Result<(), Self::Error> {
         defmt::debug!("Connecting to {:?}", remote);
         match self.message(AdapterMessageIn::Connect(remote)) {
-            Poll::Ready(AdapterMessageOut::Connect(Poll::Ready(()))) => Ok(()),
+            Poll::Ready(AdapterMessageOut::Connect(Poll::Ready(res))) => Ok(res?),
             _ => Err(nb::Error::WouldBlock),
         }
     }
@@ -437,9 +480,10 @@ impl TcpError for NetError {
             | Self::RecvError(Error::TcpError(socket::Error::ConnectionReset))
             | Self::TcpConnectError(_) => embedded_nal::TcpErrorKind::PipeClosed,
             #[cfg(feature = "tls")]
-            Self::SendError(Error::TlsError(TlsError::ConnectionClosed))
-            | Self::RecvError(Error::TlsError(TlsError::ConnectionClosed))
-            | Self::TlsConnectError(_) => embedded_nal::TcpErrorKind::PipeClosed,
+            Self::TlsConnectError(_) => embedded_nal::TcpErrorKind::PipeClosed,
+            Self::SendError(Error::TlsError(_)) | Self::RecvError(Error::TlsError(_)) => {
+                embedded_nal::TcpErrorKind::PipeClosed
+            }
             _ => embedded_nal::TcpErrorKind::Other,
         }
     }
@@ -469,6 +513,16 @@ impl PartialEq for NetError {
             (Self::RecvError(Error::TcpError(e1)), Self::RecvError(Error::TcpError(e2))) => {
                 e1 == e2
             }
+            _ => false,
+        }
+    }
+}
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::TcpError(e1), Self::TcpError(e2)) => e1 == e2,
+            #[cfg(feature = "tls")]
             _ => false,
         }
     }
