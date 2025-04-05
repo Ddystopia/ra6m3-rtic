@@ -80,10 +80,11 @@ fn init_network(
         sockets.add(tcp::Socket::new(rx, tx))
     };
 
-    let [mqtt, http @ ..] = &mut storage.tcp_sockets;
+    let rest = &mut storage.tcp_sockets;
+    let (http, rest) = rest.split_first_chunk_mut::<{ http::WORKERS }>().unwrap();
+    let ([mqtt], ..) = rest.split_first_chunk_mut::<1>().unwrap();
     let mqtt = add_tcp_socket(mqtt);
     let http = http.each_mut().map(|s| add_tcp_socket(s));
-    let http = core::array::from_fn(|i| http[i]);
 
     iface.update_ip_addrs(|ip_addrs| {
         ip_addrs.push(IpCidr::new(IP_V4, IP_V4_NETMASK)).unwrap();
