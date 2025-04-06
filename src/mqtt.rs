@@ -35,19 +35,30 @@ impl embedded_time::Clock for Mono {
 
 use crate::{Mono, socket_storage::MQTT_BUFFER_SIZE};
 
-pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
+type Minimq = minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>;
 
-pub struct Mqtt<
-    F: FnMut(
-        &mut MqttClient,
-        &str,
-        &[u8],
-        &minimq::types::Properties<'_>,
-    ) -> Result<(), minimq::Error<NetError>>,
-> {
+pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
+pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
+pub type OnMessageRtic = impl OnMessage;
+
+pub trait OnMessage:
+    FnMut(
+    &mut MqttClient,
+    &str,
+    &[u8],
+    &minimq::types::Properties<'_>,
+) -> Result<(), minimq::Error<NetError>>
+{
+}
+
+pub struct Mqtt<F: OnMessage> {
+    minimq: Option<Minimq>,
+    rest: MqttRest<F>,
+}
+
+struct MqttRest<F: OnMessage> {
     socket: SocketHandle,
     on_message: F,
-    minimq: Option<minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>>,
     conf: Option<ConfigBuilder<'static, Broker>>,
     net: TokenProvider<NetLock>,
     waker: Waker,
@@ -56,17 +67,9 @@ pub struct Mqtt<
     tls: Option<TlsArgs<'static>>,
 }
 
-pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
-pub type OnMessage = impl FnMut(
-    &mut MqttClient,
-    &str,
-    &[u8],
-    &minimq::types::Properties<'_>,
-) -> Result<(), minimq::Error<NetError>>;
-
 pub struct Storage {
     pub buffer: [u8; MQTT_BUFFER_SIZE],
-    pub mqtt: Option<Mqtt<OnMessage>>,
+    pub mqtt: Option<Mqtt<OnMessageRtic>>,
     pub token_place: poll_share::TokenProviderPlace<NetLock>,
     pub alloc: MqttAlocation,
     #[cfg(feature = "tls")]
@@ -90,15 +93,26 @@ impl Storage {
     }
 }
 
-impl<F> Mqtt<F>
-where
-    F: FnMut(
-        &mut MqttClient,
-        &str,
-        &[u8],
-        &minimq::types::Properties<'_>,
-    ) -> Result<(), minimq::Error<NetError>>,
-{
+fn get_minimq<'a, F: OnMessage>(
+    place: &'a mut Option<Minimq>,
+    mqtt: &mut MqttRest<F>,
+) -> &'a mut Minimq {
+    place.get_or_insert_with(|| {
+        let alloc = mqtt.alloc.take().unwrap();
+        let tls = mqtt.tls.take();
+        let adapter = EmbeddedNalAdapter::new(
+            mqtt.net,
+            mqtt.socket,
+            alloc,
+            mqtt.waker.clone(),
+            #[cfg(feature = "tls")]
+            tls,
+        );
+        Minimq::new(adapter, Mono, mqtt.conf.take().unwrap())
+    })
+}
+
+impl<F: OnMessage> Mqtt<F> {
     pub fn new(
         socket: SocketHandle,
         conf: ConfigBuilder<'static, Broker>,
@@ -110,49 +124,21 @@ where
     ) -> Self {
         Self {
             minimq: None,
-            socket,
-            conf: Some(conf),
-            net,
-            waker,
-            on_message,
-            alloc: Some(alloc),
-            tls,
+            rest: MqttRest {
+                socket,
+                conf: Some(conf),
+                net,
+                waker,
+                on_message,
+                alloc: Some(alloc),
+                tls,
+            },
         }
     }
 
-    fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
-        self.minimq.get_or_insert_with(|| {
-            let alloc = self.alloc.take().unwrap();
-            let tls = self.tls.take();
-            let adapter = EmbeddedNalAdapter::new(
-                self.net,
-                self.socket,
-                alloc,
-                self.waker.clone(),
-                #[cfg(feature = "tls")]
-                tls,
-            );
-            minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
-        })
-    }
-
     pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<NetError>>> {
-        let minimq = self.minimq.get_or_insert_with(|| {
-            let alloc = self.alloc.take().unwrap();
-            #[cfg(feature = "tls")]
-            let tls = self.tls.take();
-            let adapter = EmbeddedNalAdapter::new(
-                self.net,
-                self.socket,
-                alloc,
-                self.waker.clone(),
-                #[cfg(feature = "tls")]
-                tls,
-            );
-            minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
-        });
-
-        match minimq.poll(|a, b, c, d| (self.on_message)(a, b, c, d)) {
+        let minimq = get_minimq(&mut self.minimq, &mut self.rest);
+        match minimq.poll(|a, b, c, d| (self.rest.on_message)(a, b, c, d)) {
             Ok(Some(Ok(()))) | Ok(None) | Err(minimq::Error::NotReady) => Poll::Pending,
             Ok(Some(Err(err))) | Err(err) => Poll::Ready(Err(err)),
         }
@@ -184,7 +170,8 @@ where
             if let Poll::Ready(v) = self.poll() {
                 return Poll::Ready(v.map(|_| ()));
             }
-            match self.minimq().client().subscribe(topics, properties) {
+            let minimq = get_minimq(&mut self.minimq, &mut self.rest);
+            match minimq.client().subscribe(topics, properties) {
                 Ok(_) => Poll::Ready(Ok(())),
                 Err(minimq::Error::NotReady) => self.poll().map(|r| r.map(|_| ())),
                 Err(other) => Poll::Ready(Err(other)),
@@ -196,7 +183,8 @@ where
             if let Poll::Ready(v) = self.poll() {
                 return Poll::Ready(v.map(|_| ()));
             }
-            if self.minimq().client().subscriptions_pending() {
+            let minimq = get_minimq(&mut self.minimq, &mut self.rest);
+            if minimq.client().subscriptions_pending() {
                 Poll::Pending
             } else {
                 Poll::Ready(Ok(()))
@@ -208,8 +196,8 @@ where
     }
 }
 
-#[define_opaque(OnMessage)]
-fn on_message() -> OnMessage {
+#[define_opaque(OnMessageRtic)]
+fn on_message() -> OnMessageRtic {
     // note: annotations are for rust-analyzer, rustc does not require them
     |client: &mut MqttClient,
      topic: &str,
@@ -290,4 +278,14 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
             Err(_other) => defmt::error!("Unknown mqtt error"),
         }
     }
+}
+
+impl<F> OnMessage for F where
+    F: FnMut(
+        &mut MqttClient,
+        &str,
+        &[u8],
+        &minimq::types::Properties<'_>,
+    ) -> Result<(), minimq::Error<NetError>>
+{
 }
