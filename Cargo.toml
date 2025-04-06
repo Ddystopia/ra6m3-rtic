@@ -39,8 +39,8 @@ opt-level = 's'
 opt-level = 1
 
 [features]
-default = ["qemu"]
-# default = ["qemu", "tls"]
+# default = ["qemu"]
+default = ["qemu", "tls"]
 # default = ["ra6m3"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra6m3"]
