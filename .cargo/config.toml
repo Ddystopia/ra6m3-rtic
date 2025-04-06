@@ -24,7 +24,7 @@ rustflags = [
 
 [env]
 CC = "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
-DEFMT_LOG = "trace,smoltcp=info"
+DEFMT_LOG = "trace,smoltcp=info,embedded_tls=info"
 MAC = "fe:e3:a9:97:ad:ab"
 IP_V4 = "192.168.69.100/24"
 IP_V4_GATEWAY = "192.168.69.1"
