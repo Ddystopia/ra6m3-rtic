@@ -393,7 +393,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
 
     fn send(
         &mut self,
-        _handle: &mut Self::TcpSocket,
+        &mut handle: &mut Self::TcpSocket,
         buffer: &[u8],
     ) -> nb::Result<usize, Self::Error> {
         if buffer.len() == 0 {
@@ -406,6 +406,8 @@ impl TcpClientStack for EmbeddedNalAdapter {
                 Err(AdapterMessageIn::Write(guard)) => return (guard, Err(nb::Error::WouldBlock)),
                 Err(_) => unreachable!(),
             };
+
+            self.setup_wakers(handle);
 
             match message {
                 AdapterMessageOut::Write(Some(Ok(len)), b) => (b, Ok(len)),
@@ -434,14 +436,13 @@ impl TcpClientStack for EmbeddedNalAdapter {
                 Err(_) => unreachable!(),
             };
 
+            self.setup_wakers(handle);
+
             match message {
                 AdapterMessageOut::Read(Some(Ok(0)), b) => {
                     (b, Err(nb::Error::Other(NetError::PipeClosed)))
                 }
-                AdapterMessageOut::Read(Some(Ok(len)), b) => {
-                    self.setup_wakers(handle);
-                    (b, Ok(len))
-                }
+                AdapterMessageOut::Read(Some(Ok(len)), b) => (b, Ok(len)),
                 AdapterMessageOut::Read(Some(Err(e)), b) => {
                     (b, Err(nb::Error::Other(NetError::RecvError(e))))
                 }
