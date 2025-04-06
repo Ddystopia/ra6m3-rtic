@@ -583,7 +583,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "extend_mut"
-version = "0.4.1"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4b8d830aef38d0d7ea405a6120f00d3f3de79d2a5a6f5b109b7bca1be48ab7a9"
 dependencies = [
  "pin-project-lite",
 ]
