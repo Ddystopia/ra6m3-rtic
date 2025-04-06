@@ -1,7 +1,7 @@
 use core::task::{Poll, Waker};
 
 use crate::{
-    conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT},
+    conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS},
     poll_share::{self, TokenProvider},
     socket::{self},
 };
@@ -231,10 +231,15 @@ fn on_message() -> OnMessage {
 pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: SocketHandle) -> ! {
     let storage = ctx.local.storage;
     let net = TokenProvider::new(&mut storage.token_place, ctx.shared.net);
+    let port = if cfg!(feature = "tls") {
+        MQTT_BROKER_PORT_TLS
+    } else {
+        MQTT_BROKER_PORT_TCP
+    };
     let conf = minimq::ConfigBuilder::new(
         Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
             MQTT_BROKER_IP,
-            MQTT_BROKER_PORT,
+            port,
         ))),
         &mut storage.buffer[..],
     );

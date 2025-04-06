@@ -39,7 +39,10 @@ pub const IP_V6_GATEWAY: wire::Ipv6Address =
     parse_ipv6!(env!("IP_V6_GATEWAY"), wire::Ipv6Address::new);
 
 pub const MQTT_BROKER_IP: Ipv4Addr = parse_ipv4!(env!("MQTT_BROKER_IP"), Ipv4Addr::new);
-pub const MQTT_BROKER_PORT: u16 = parse_u16(env!("MQTT_BROKER_PORT"), 10, "Invalid MQTT port");
+pub const MQTT_BROKER_PORT_TLS: u16 =
+    parse_u16(env!("MQTT_BROKER_PORT_TLS"), 10, "Invalid MQTT port");
+pub const MQTT_BROKER_PORT_TCP: u16 =
+    parse_u16(env!("MQTT_BROKER_PORT_TCP"), 10, "Invalid MQTT port");
 
 const fn split_ip(ip: &str) -> (&str, u8) {
     let (ip, mask) = konst::option::unwrap!(string::split_once(ip, "/"));
