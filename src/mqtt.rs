@@ -99,6 +99,7 @@ fn get_minimq<'a, F: OnMessage>(
 ) -> &'a mut Minimq {
     place.get_or_insert_with(|| {
         let alloc = mqtt.alloc.take().unwrap();
+        #[cfg(feature = "tls")]
         let tls = mqtt.tls.take();
         let adapter = EmbeddedNalAdapter::new(
             mqtt.net,
