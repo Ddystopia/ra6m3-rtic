@@ -89,7 +89,7 @@ enum AdapterMessageIn {
 #[derive(Debug, PartialEq)]
 enum AdapterMessageOut {
     Connect(Poll<Result<(), NetError>>),
-    Closing,
+    Close(Poll<Result<(), NetError>>),
     Read(Option<Result<usize, Error>>, &'static mut [u8]),
     Write(Option<Result<usize, Error>>, ExtendRefGuard<[u8]>),
 }
@@ -173,12 +173,18 @@ async fn handle_tls_session(
                 tx.set(Some(AdapterMessageOut::Write(result, buffer)));
             }
             AdapterMessageIn::Close => {
-                tx.set(Some(AdapterMessageOut::Closing));
-                if let Err(err) = tls_socket.close().await {
-                    defmt::error!("TLS close error: {}", err);
-                    let mut tcp_socket = TcpSocket::new(net, handle);
-                    tcp_socket.abort();
-                }
+                tx.set(Some(AdapterMessageOut::Close(Poll::Pending)));
+
+                let res = match tls_socket.close().await {
+                    Ok(()) => Ok(()),
+                    Err(err) => {
+                        defmt::error!("TLS close error: {}", err);
+                        let mut tcp_socket = TcpSocket::new(net, handle);
+                        tcp_socket.abort();
+                        Err(NetError::PipeClosed)
+                    }
+                };
+                tx.set(Some(AdapterMessageOut::Close(Poll::Ready(res))));
                 return;
             }
         }
@@ -256,8 +262,9 @@ async fn adapter_task(
                 tx.set(Some(AdapterMessageOut::Write(result, buffer)));
             }
             AdapterMessageIn::Close => {
-                tx.set(Some(AdapterMessageOut::Closing));
+                tx.set(Some(AdapterMessageOut::Close(Poll::Pending)));
                 tcp_socket.disconnect().await;
+                tx.set(Some(AdapterMessageOut::Close(Poll::Ready(Ok(())))));
                 connected = false;
             }
         }
@@ -337,10 +344,14 @@ impl EmbeddedNalAdapter {
                 self.rx.set(conn);
                 Err(msg)
             }
-            (None, close @ Some(AdapterMessageOut::Closing)) => {
+            (None, close @ Some(AdapterMessageOut::Close(Poll::Pending))) => {
                 // we are still closing
                 self.rx.set(close);
                 Err(msg)
+            }
+            (None, Some(AdapterMessageOut::Close(Poll::Ready(_)))) => {
+                // ignore close status, loop.
+                self.message(msg)
             }
             (None, None) => Err(msg),
             c => unreachable!("{:?}", c),
