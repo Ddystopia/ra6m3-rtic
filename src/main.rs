@@ -165,17 +165,17 @@ mod app {
     async fn waiter(_: waiter::Context) -> ! {
         let mut next = Mono::now();
 
-        defmt::info!("Waiter task: 1");
+        defmt::info!("Waiter task: 1 at {}", Mono::now().ticks());
 
         next += 1000.millis();
         Mono::delay_until(next).await;
 
-        defmt::info!("Waiter task: 2");
+        defmt::info!("Waiter task: 2 at {}", Mono::now().ticks());
 
         next += 1000.millis();
         Mono::delay_until(next).await;
 
-        defmt::info!("Waiter task: 3");
+        defmt::info!("Waiter task: 3 at {}", Mono::now().ticks());
 
         core::future::pending().await
     }
