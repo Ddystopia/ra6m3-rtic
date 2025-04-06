@@ -201,8 +201,9 @@ async fn adapter_task(
 ) -> ! {
     let mut connected = false;
     let mut tcp_socket = TcpSocket::new(net, handle);
-    tcp_socket.set_timeout(Some(smoltcp::time::Duration::from_millis(5100)));
-    tcp_socket.set_keep_alive(Some(smoltcp::time::Duration::from_millis(2500)));
+    // fixme: maybe we do not need keep alives here?
+    tcp_socket.set_timeout(Some(smoltcp::time::Duration::from_secs(3600)));
+    tcp_socket.set_keep_alive(Some(smoltcp::time::Duration::from_secs(3600 / 3)));
     let mut port_shift = core::num::Wrapping::<u8>(0);
     let mut last_connection_attempt: Option<Instant<u32, 1, 1000>> = None;
 
