@@ -78,7 +78,7 @@ pub enum NetError {
     RecvError(Error),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, defmt::Format)]
 enum AdapterMessageIn {
     Connect(SocketAddr),
     Read(&'static mut [u8]),
