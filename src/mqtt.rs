@@ -123,13 +123,14 @@ where
     fn minimq(&mut self) -> &mut minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker> {
         self.minimq.get_or_insert_with(|| {
             let alloc = self.alloc.take().unwrap();
+            let tls = self.tls.take();
             let adapter = EmbeddedNalAdapter::new(
                 self.net,
                 self.socket,
                 alloc,
                 self.waker.clone(),
                 #[cfg(feature = "tls")]
-                None,
+                tls,
             );
             minimq::Minimq::new(adapter, Mono, self.conf.take().unwrap())
         })
