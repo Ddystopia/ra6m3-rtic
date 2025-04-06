@@ -357,7 +357,6 @@ impl TcpClientStack for EmbeddedNalAdapter {
         Ok(self.socket_handle)
     }
 
-    // note: this path is called x3-x5 times for some reason. Who wakes mqtt task so much?
     fn connect(
         &mut self,
         _handle: &mut Self::TcpSocket,
