@@ -140,16 +140,15 @@ async fn handle_tls_session(
 
     tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(result))));
 
+    poll_fn(|cx| Poll::Ready(cx.waker().wake_by_ref())).await;
+
     if is_err {
         return;
     }
 
     loop {
         match dequeue(rx, waiting_for_message).await {
-            AdapterMessageIn::Connect(_) => {
-                tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(Ok(())))))
-            }
-            // AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
+            AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
                     let mut fut = pin!(tls_socket.0.read(buffer));
@@ -184,6 +183,7 @@ async fn handle_tls_session(
                         Err(NetError::PipeClosed)
                     }
                 };
+                poll_fn(|cx| Poll::Ready(cx.waker().wake_by_ref())).await;
                 tx.set(Some(AdapterMessageOut::Close(Poll::Ready(res))));
                 return;
             }
@@ -201,6 +201,8 @@ async fn adapter_task(
 ) -> ! {
     let mut connected = false;
     let mut tcp_socket = TcpSocket::new(net, handle);
+    tcp_socket.set_timeout(Some(smoltcp::time::Duration::from_millis(5100)));
+    tcp_socket.set_keep_alive(Some(smoltcp::time::Duration::from_millis(2500)));
     let mut port_shift = core::num::Wrapping::<u8>(0);
     let mut last_connection_attempt: Option<Instant<u32, 1, 1000>> = None;
 
@@ -221,10 +223,14 @@ async fn adapter_task(
                 last_connection_attempt = Some(Mono::now());
                 let port = MQTT_CLIENT_PORT + port_shift.0 as u16;
 
+                port_shift += 1;
+
                 let result = tcp_socket
                     .connect(socket_addr, port)
                     .await
                     .map_err(NetError::TcpConnectError);
+
+                poll_fn(|cx| Poll::Ready(cx.waker().wake_by_ref())).await;
 
                 #[cfg(feature = "tls")]
                 if let Some(tls) = tls.as_mut() {
@@ -238,8 +244,6 @@ async fn adapter_task(
                     connected = result.is_ok();
                     tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(result))));
                 }
-
-                port_shift += 1;
             }
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
@@ -264,6 +268,7 @@ async fn adapter_task(
             AdapterMessageIn::Close => {
                 tx.set(Some(AdapterMessageOut::Close(Poll::Pending)));
                 tcp_socket.disconnect().await;
+                poll_fn(|cx| Poll::Ready(cx.waker().wake_by_ref())).await;
                 tx.set(Some(AdapterMessageOut::Close(Poll::Ready(Ok(())))));
                 connected = false;
             }
@@ -447,8 +452,14 @@ impl TcpClientStack for EmbeddedNalAdapter {
     }
 
     fn close(&mut self, _handle: Self::TcpSocket) -> Result<(), Self::Error> {
-        _ = self.message(AdapterMessageIn::Close);
-        Ok(())
+        match self.message(AdapterMessageIn::Close) {
+            Ok(AdapterMessageOut::Close(Poll::Ready(res))) => res,
+            Err(_) | Ok(AdapterMessageOut::Close(Poll::Pending)) => {
+                // we are still closing
+                return Err(NetError::PipeClosed);
+            }
+            Ok(_) => unreachable!(),
+        }
     }
 }
 
