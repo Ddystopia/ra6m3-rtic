@@ -21,7 +21,6 @@ embedded-nal = "0.9.0"
 embedded-time = "0.12.1"
 futures-lite = { version = "2.6.0", default-features = false, features = [] }
 heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"] }
-atomic_refcell = "0.1.13"
 static_cell = "2.1.0"
 picoserve = { version = "0.15.0", features = ["defmt"] }
 replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
