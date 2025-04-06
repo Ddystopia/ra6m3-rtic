@@ -254,7 +254,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
         tls_rx: &mut storage.tls_rx,
         tls_tx: &mut storage.tls_tx,
         config: embedded_tls::TlsConfig::new()
-            .with_server_name("example.com")
+            // .with_server_name("example.com") // It works without it for now, let it be like this
             .enable_rsa_signatures(),
     });
     #[cfg(not(feature = "tls"))]
