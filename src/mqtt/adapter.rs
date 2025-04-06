@@ -53,15 +53,18 @@ pub struct MqttAlocation {
     future_place: Option<AdapterFut>,
     tx_queue: Cell<Option<AdapterMessageIn>>,
     rx_queue: Cell<Option<AdapterMessageOut>>,
+    waiting_for_message: Cell<bool>,
 }
 
 pub struct EmbeddedNalAdapter {
     socket_handle: SocketHandle,
     net: TokenProvider<NetLock>,
     waker: Waker,
+    remote: Option<SocketAddr>,
     fut: Pin<&'static mut AdapterFut>,
     tx: &'static Cell<Option<AdapterMessageIn>>,
     rx: &'static Cell<Option<AdapterMessageOut>>,
+    waiting_for_message: &'static Cell<bool>,
 }
 
 #[derive(Debug, defmt::Format)]
@@ -73,7 +76,6 @@ pub enum Error {
 
 #[derive(Debug, defmt::Format)]
 pub enum NetError {
-    SocketUsed,
     PipeClosed,
     TcpConnectError(socket::ConnectError),
     #[cfg(feature = "tls")]
@@ -82,24 +84,20 @@ pub enum NetError {
     RecvError(Error),
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum AdapterMessageIn {
     Connect(SocketAddr),
     Read(&'static mut [u8]),
     Write(ExtendRefGuard<[u8]>),
     Close,
-    Socket,
-    Ping,
 }
 
 #[derive(Debug, PartialEq)]
 enum AdapterMessageOut {
     Connect(Poll<Result<(), NetError>>),
     Closing,
-    Socket(Option<()>),
     Read(Option<Result<usize, Error>>, &'static mut [u8]),
     Write(Option<Result<usize, Error>>, ExtendRefGuard<[u8]>),
-    Pong,
 }
 
 impl minimq::Broker for Broker {
@@ -112,10 +110,13 @@ impl minimq::Broker for Broker {
     }
 }
 
-async fn dequeue(rx: &Cell<Option<AdapterMessageIn>>) -> AdapterMessageIn {
+async fn dequeue(rx: &Cell<Option<AdapterMessageIn>>, waiting: &Cell<bool>) -> AdapterMessageIn {
     poll_fn(|_| match rx.take() {
         Some(v) => Poll::Ready(v),
-        None => Poll::Pending,
+        None => {
+            waiting.set(true);
+            Poll::Pending
+        }
     })
     .await
 }
@@ -127,6 +128,7 @@ async fn handle_tls_session(
     tls: &mut TlsArgs<'static>,
     rx: &'static Cell<Option<AdapterMessageIn>>,
     tx: &'static Cell<Option<AdapterMessageOut>>,
+    waiting_for_message: &Cell<bool>,
 ) {
     use rand_chacha::rand_core::SeedableRng;
 
@@ -153,7 +155,7 @@ async fn handle_tls_session(
     }
 
     loop {
-        match dequeue(rx).await {
+        match dequeue(rx, waiting_for_message).await {
             AdapterMessageIn::Connect(_) => {
                 tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(Ok(())))))
             }
@@ -172,7 +174,7 @@ async fn handle_tls_session(
             AdapterMessageIn::Write(buffer) => {
                 defmt::info!("TLS Write request: buffer: {:?}", buffer);
                 let result = match {
-                    let mut read_fut = pin!(tls_socket.0.write(buffer));
+                    let mut read_fut = pin!(tls_socket.0.write(&*buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
                 } {
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
@@ -190,8 +192,6 @@ async fn handle_tls_session(
                 }
                 return;
             }
-            AdapterMessageIn::Socket => _ = tx.set(Some(AdapterMessageOut::Socket(None))),
-            AdapterMessageIn::Ping => _ = tx.set(Some(AdapterMessageOut::Pong)),
         }
     }
 }
@@ -202,6 +202,7 @@ async fn adapter_task(
     #[cfg(feature = "tls")] mut tls: Option<TlsArgs<'static>>,
     rx: &'static Cell<Option<AdapterMessageIn>>,
     tx: &'static Cell<Option<AdapterMessageOut>>,
+    waiting_for_message: &Cell<bool>,
 ) -> ! {
     let mut connected = false;
     let mut tcp_socket = TcpSocket::new(net, handle);
@@ -209,7 +210,7 @@ async fn adapter_task(
     let mut last_connection_attempt: Option<Instant<u32, 1, 1000>> = None;
 
     loop {
-        match dequeue(rx).await {
+        match dequeue(rx, waiting_for_message).await {
             AdapterMessageIn::Connect(_) if connected => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Connect(socket_addr) => {
                 tx.set(Some(AdapterMessageOut::Connect(Poll::Pending)));
@@ -219,9 +220,7 @@ async fn adapter_task(
                 if let Some(last) = last_connection_attempt {
                     if let Some(diff) = Mono::now().checked_duration_since(last) {
                         if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
-                            defmt::info!("TCP connecting -- waiting");
                             Mono::delay_until(last + RECONNECT_INTERVAL_MS.millis()).await;
-                            defmt::info!("TCP connecting -- really connecting");
                         }
                     }
                 }
@@ -234,12 +233,12 @@ async fn adapter_task(
                     .await
                     .map_err(NetError::TcpConnectError);
 
-                defmt::info!("TCP connected: {}", result.is_ok());
+                defmt::info!("TCP connected: {}\n", result.is_ok());
 
                 #[cfg(feature = "tls")]
                 if let Some(tls) = tls.as_mut() {
                     defmt::info!("TCP connected -> Passing to TLS");
-                    handle_tls_session(net, handle, tls, rx, tx).await;
+                    handle_tls_session(net, handle, tls, rx, tx, waiting_for_message).await;
                 } else {
                     connected = result.is_ok();
                     tx.set(Some(AdapterMessageOut::Connect(Poll::Ready(result))));
@@ -279,10 +278,6 @@ async fn adapter_task(
                 tcp_socket.disconnect().await;
                 connected = false;
             }
-            AdapterMessageIn::Socket => {
-                tx.set(Some(AdapterMessageOut::Socket((!connected).then_some(()))))
-            }
-            AdapterMessageIn::Ping => tx.set(Some(AdapterMessageOut::Pong)),
         }
     }
 }
@@ -298,6 +293,7 @@ impl EmbeddedNalAdapter {
     ) -> Self {
         let tx_tx @ tx_rx = &alloc.tx_queue;
         let rx_tx @ rx_rx = &alloc.rx_queue;
+        let waiting_for_message = &alloc.waiting_for_message;
 
         let fut = adapter_task(
             net,
@@ -306,6 +302,7 @@ impl EmbeddedNalAdapter {
             tls,
             tx_rx,
             rx_tx,
+            waiting_for_message,
         );
         let fut = Pin::static_mut(alloc.future_place.get_or_insert(fut));
 
@@ -313,10 +310,17 @@ impl EmbeddedNalAdapter {
             socket_handle: handle,
             net,
             waker,
+            remote: None,
             tx: tx_tx,
             rx: rx_rx,
             fut,
+            waiting_for_message,
         }
+    }
+
+    fn poll(&mut self) {
+        let mut ctx = Context::from_waker(&self.waker);
+        _ = self.fut.as_mut().poll(&mut ctx);
     }
 
     fn setup_wakers(&mut self, handle: SocketHandle) {
@@ -328,40 +332,37 @@ impl EmbeddedNalAdapter {
     }
 
     fn message(&mut self, msg: AdapterMessageIn) -> Result<AdapterMessageOut, AdapterMessageIn> {
+        self.waiting_for_message.set(false);
+
+        self.poll();
+
         match (self.tx.take(), self.rx.take()) {
-            (ping @ Some(AdapterMessageIn::Ping), None) => {
-                self.tx.set(ping);
-                return Err(msg);
+            (None, None) if self.waiting_for_message.get() => {
+                self.tx.set(Some(msg));
+                self.poll();
+                Ok(self.rx.take().unwrap())
             }
-            (close @ Some(AdapterMessageIn::Close), None) => {
-                self.tx.set(close);
-                return Err(msg);
-            }
-            (Some(AdapterMessageIn::Close), Some(out)) => {
-                assert_eq!(out, AdapterMessageOut::Closing)
-            }
-            (None, Some(AdapterMessageOut::Pong) | None) => (),
 
-            _ => unreachable!(),
+            (None, Some(ready @ AdapterMessageOut::Connect(Poll::Ready(_)))) => {
+                if msg == AdapterMessageIn::Connect(self.remote.unwrap()) {
+                    Ok(ready)
+                } else {
+                    unreachable!();
+                }
+            }
+            (None, conn @ Some(AdapterMessageOut::Connect(Poll::Pending))) => {
+                // we are still connecting
+                self.rx.set(conn);
+                Err(msg)
+            }
+            (None, close @ Some(AdapterMessageOut::Closing)) => {
+                // we are still closing
+                self.rx.set(close);
+                Err(msg)
+            }
+            (None, None) => Err(msg),
+            c => unreachable!("{:?}", c),
         }
-
-        let mut ctx = Context::from_waker(&self.waker);
-
-        // assert that actor is not waiting.
-        {
-            self.tx.set(Some(AdapterMessageIn::Ping));
-            _ = self.fut.as_mut().poll(&mut ctx);
-
-            match self.rx.take() {
-                Some(AdapterMessageOut::Pong) => (),
-                Some(_other) => unreachable!(),
-                None => return Err(msg),
-            }
-        }
-
-        self.tx.set(Some(msg));
-        _ = self.fut.as_mut().poll(&mut ctx);
-        Ok(self.rx.take().unwrap())
     }
 }
 
@@ -371,10 +372,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
     type Error = NetError;
 
     fn socket(&mut self) -> Result<Self::TcpSocket, Self::Error> {
-        match self.message(AdapterMessageIn::Socket) {
-            Ok(AdapterMessageOut::Socket(Some(()))) => Ok(self.socket_handle),
-            _ => Err(NetError::SocketUsed),
-        }
+        Ok(self.socket_handle)
     }
 
     // note: this path is called x3-x5 times for some reason. Who wakes mqtt task so much?
@@ -383,9 +381,15 @@ impl TcpClientStack for EmbeddedNalAdapter {
         _handle: &mut Self::TcpSocket,
         remote: core::net::SocketAddr,
     ) -> nb::Result<(), Self::Error> {
-        defmt::debug!("Connecting to {:?}", remote);
+        let old_remote = *self.remote.get_or_insert(remote);
+
+        assert_eq!(
+            old_remote, remote,
+            "We assume that we connect to the same address in order to not deal with connection cancelling"
+        );
+
         match self.message(AdapterMessageIn::Connect(remote)) {
-            Ok(AdapterMessageOut::Connect(Poll::Ready(res))) => Ok(res?),
+            Ok(AdapterMessageOut::Connect(Poll::Ready(res))) => res.map_err(nb::Error::Other),
             _ => Err(nb::Error::WouldBlock),
         }
     }
@@ -470,7 +474,6 @@ impl TcpError for NetError {
             Self::SendError(Error::TlsError(_)) | Self::RecvError(Error::TlsError(_)) => {
                 embedded_nal::TcpErrorKind::PipeClosed
             }
-            _ => embedded_nal::TcpErrorKind::Other,
         }
     }
 }
@@ -481,6 +484,7 @@ impl MqttAlocation {
             future_place: None,
             tx_queue: Cell::new(None),
             rx_queue: Cell::new(None),
+            waiting_for_message: Cell::new(false),
         }
     }
 }
@@ -488,7 +492,6 @@ impl MqttAlocation {
 impl PartialEq for NetError {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (Self::SocketUsed, Self::SocketUsed) => true,
             (Self::PipeClosed, Self::PipeClosed) => true,
             (Self::TcpConnectError(e1), Self::TcpConnectError(e2)) => e1 == e2,
             #[cfg(feature = "tls")]

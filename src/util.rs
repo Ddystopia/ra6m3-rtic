@@ -32,7 +32,7 @@ pub const fn waker(f: fn()) -> Waker {
     unsafe { Waker::from_raw(raw) }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, defmt::Format)]
 pub struct ExtendRefGuard<T: ?Sized> {
     id: u128,
     value: *const T,
