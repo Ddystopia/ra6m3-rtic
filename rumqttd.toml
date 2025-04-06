@@ -7,15 +7,26 @@ max_outgoing_packet_count = 200
 max_segment_size = 1048576
 max_segment_count = 10
 
-# RTIC Device
+# RTIC Device TLS
 [v5.1]
-name = "v5-1"
+name = "v5-1-tls"
 listen = "192.168.69.20:1883"
 next_connection_delay_ms = 1
-# [v5.1.tls]
-#     # capath = "/etc/tls/ca.cert.pem"
-#     certpath = "./tls/server.cert.pem"
-#     keypath = "./tls/server.key.pem"
+[v5.1.connections]
+    connection_timeout_ms = 60000
+    max_payload_size = 102400
+    max_inflight_count = 100
+    dynamic_filters = true
+
+# RTIC Device TLS
+[v5.1]
+name = "v5-1"
+listen = "192.168.69.20:8883"
+next_connection_delay_ms = 1
+[v5.1.tls]
+    # capath = "/etc/tls/ca.cert.pem"
+    certpath = "./tls/server.cert.pem"
+    keypath = "./tls/server.key.pem"
 [v5.1.connections]
     connection_timeout_ms = 60000
     max_payload_size = 102400

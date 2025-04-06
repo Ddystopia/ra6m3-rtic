@@ -25,7 +25,6 @@ atomic_refcell = "0.1.13"
 static_cell = "2.1.0"
 picoserve = { version = "0.15.0", features = ["defmt"] }
 replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
-# embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", rev = "c0a0bb886a85505b760a9fbb2826d73c540372bc", default-features = false, features = ["defmt"], optional = true }
 embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", default-features = false, features = ["defmt"], optional = true }
 embedded-io-async = "0.6.1"
 futures-util = { version = "0.3.31", default-features = false }

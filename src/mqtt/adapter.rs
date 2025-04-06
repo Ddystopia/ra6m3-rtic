@@ -1,9 +1,3 @@
-/*
-
-TLS status: Library reports that handshake is done. Wireshark can't detect that there is
-any TLS handshake.
-*/
-
 use core::{
     cell::Cell,
     future::poll_fn,
@@ -137,14 +131,10 @@ async fn handle_tls_session(
     let ctx = TlsContext::new(&tls.config, UnsecureProvider::new(&mut rng));
     let mut tls_socket = TlsSocket::new(tcp_socket, tls.tls_rx, tls.tls_tx);
 
-    defmt::info!("Starting TLS handshake");
-
     let result = tls_socket
         .open(ctx)
         .await
         .map_err(NetError::TlsConnectError);
-
-    defmt::info!("TLS handshake done: {}", result.is_ok());
 
     let is_err = result.is_err();
 
@@ -162,25 +152,24 @@ async fn handle_tls_session(
             // AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
-                    let mut read_fut = pin!(tls_socket.0.read(buffer));
-                    poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
+                    let mut fut = pin!(tls_socket.0.read(buffer));
+                    poll_fn(|cx| Poll::Ready(fut.as_mut().poll(cx))).await
                 } {
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
                     Poll::Pending => None,
                 };
-                defmt::info!("TLS Read request: fulfilled: {}", result.is_some());
                 tx.set(Some(AdapterMessageOut::Read(result, buffer)));
             }
             AdapterMessageIn::Write(buffer) => {
-                defmt::info!("TLS Write request: buffer: {:?}", buffer);
                 let result = match {
-                    let mut read_fut = pin!(tls_socket.0.write(&*buffer));
-                    poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
+                    let mut fut = pin!(tls_socket.0.write(&*buffer));
+                    poll_fn(|cx| Poll::Ready(fut.as_mut().poll(cx))).await
                 } {
                     Poll::Ready(result) => Some(result.map_err(Error::TlsError)),
                     Poll::Pending => None,
                 };
-                defmt::info!("TLS Write request: fulfilled: {}", result.is_some());
+                let mut flush_fut = pin!(tls_socket.0.flush());
+                _ = poll_fn(|cx| Poll::Ready(flush_fut.as_mut().poll(cx))).await;
                 tx.set(Some(AdapterMessageOut::Write(result, buffer)));
             }
             AdapterMessageIn::Close => {
@@ -215,8 +204,6 @@ async fn adapter_task(
             AdapterMessageIn::Connect(socket_addr) => {
                 tx.set(Some(AdapterMessageOut::Connect(Poll::Pending)));
 
-                defmt::info!("TCP connecting");
-
                 if let Some(last) = last_connection_attempt {
                     if let Some(diff) = Mono::now().checked_duration_since(last) {
                         if diff < RECONNECT_INTERVAL_MS.millis::<1, 1000>() {
@@ -233,11 +220,8 @@ async fn adapter_task(
                     .await
                     .map_err(NetError::TcpConnectError);
 
-                defmt::info!("TCP connected: {}\n", result.is_ok());
-
                 #[cfg(feature = "tls")]
                 if let Some(tls) = tls.as_mut() {
-                    defmt::info!("TCP connected -> Passing to TLS");
                     handle_tls_session(net, handle, tls, rx, tx, waiting_for_message).await;
                 } else {
                     connected = result.is_ok();
@@ -252,7 +236,6 @@ async fn adapter_task(
                 port_shift += 1;
             }
             AdapterMessageIn::Read(buffer) => {
-                defmt::info!("TCP READ request");
                 let result = match {
                     let mut read_fut = pin!(tcp_socket.read(buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
@@ -263,7 +246,6 @@ async fn adapter_task(
                 tx.set(Some(AdapterMessageOut::Read(result, buffer)));
             }
             AdapterMessageIn::Write(buffer) => {
-                defmt::info!("TCP Write request");
                 let result = match {
                     let mut read_fut = pin!(tcp_socket.write(&*buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
@@ -455,7 +437,6 @@ impl TcpClientStack for EmbeddedNalAdapter {
     }
 
     fn close(&mut self, _handle: Self::TcpSocket) -> Result<(), Self::Error> {
-        defmt::info!("Closing socket");
         _ = self.message(AdapterMessageIn::Close);
         Ok(())
     }
