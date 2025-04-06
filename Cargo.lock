@@ -582,6 +582,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
+name = "extend_mut"
+version = "0.4.1"
+dependencies = [
+ "pin-project-lite",
+]
+
+[[package]]
 name = "ff"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1178,6 +1185,7 @@ dependencies = [
  "embedded-nal",
  "embedded-time",
  "embedded-tls",
+ "extend_mut",
  "futures-lite",
  "futures-util",
  "heapless 0.8.0",

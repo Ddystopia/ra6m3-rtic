@@ -25,6 +25,7 @@ use crate::{
     Mono,
     poll_share::TokenProvider,
     socket::{self, TcpSocket},
+    util::ExtendRefGuard,
 };
 
 use super::NetLock;
@@ -85,7 +86,7 @@ pub enum NetError {
 enum AdapterMessageIn {
     Connect(SocketAddr),
     Read(&'static mut [u8]),
-    Write(&'static [u8]),
+    Write(ExtendRefGuard<[u8]>),
     Close,
     Socket,
     Ping,
@@ -97,7 +98,7 @@ enum AdapterMessageOut {
     Closing,
     Socket(Option<()>),
     Read(Option<Result<usize, Error>>, &'static mut [u8]),
-    Write(Option<Result<usize, Error>>, &'static [u8]),
+    Write(Option<Result<usize, Error>>, ExtendRefGuard<[u8]>),
     Pong,
 }
 
@@ -265,7 +266,7 @@ async fn adapter_task(
             AdapterMessageIn::Write(buffer) => {
                 defmt::info!("TCP Write request");
                 let result = match {
-                    let mut read_fut = pin!(tcp_socket.write(buffer));
+                    let mut read_fut = pin!(tcp_socket.write(&*buffer));
                     poll_fn(|cx| Poll::Ready(read_fut.as_mut().poll(cx))).await
                 } {
                     Poll::Ready(result) => Some(result.map_err(Error::TcpError)),
@@ -326,15 +327,15 @@ impl EmbeddedNalAdapter {
         });
     }
 
-    fn message(&mut self, msg: AdapterMessageIn) -> Poll<AdapterMessageOut> {
+    fn message(&mut self, msg: AdapterMessageIn) -> Result<AdapterMessageOut, AdapterMessageIn> {
         match (self.tx.take(), self.rx.take()) {
             (ping @ Some(AdapterMessageIn::Ping), None) => {
                 self.tx.set(ping);
-                return Poll::Pending;
+                return Err(msg);
             }
             (close @ Some(AdapterMessageIn::Close), None) => {
                 self.tx.set(close);
-                return Poll::Pending;
+                return Err(msg);
             }
             (Some(AdapterMessageIn::Close), Some(out)) => {
                 assert_eq!(out, AdapterMessageOut::Closing)
@@ -354,13 +355,13 @@ impl EmbeddedNalAdapter {
             match self.rx.take() {
                 Some(AdapterMessageOut::Pong) => (),
                 Some(_other) => unreachable!(),
-                None => return Poll::Pending,
+                None => return Err(msg),
             }
         }
 
         self.tx.set(Some(msg));
         _ = self.fut.as_mut().poll(&mut ctx);
-        Poll::Ready(self.rx.take().unwrap())
+        Ok(self.rx.take().unwrap())
     }
 }
 
@@ -371,7 +372,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
 
     fn socket(&mut self) -> Result<Self::TcpSocket, Self::Error> {
         match self.message(AdapterMessageIn::Socket) {
-            Poll::Ready(AdapterMessageOut::Socket(Some(()))) => Ok(self.socket_handle),
+            Ok(AdapterMessageOut::Socket(Some(()))) => Ok(self.socket_handle),
             _ => Err(NetError::SocketUsed),
         }
     }
@@ -384,7 +385,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
     ) -> nb::Result<(), Self::Error> {
         defmt::debug!("Connecting to {:?}", remote);
         match self.message(AdapterMessageIn::Connect(remote)) {
-            Poll::Ready(AdapterMessageOut::Connect(Poll::Ready(res))) => Ok(res?),
+            Ok(AdapterMessageOut::Connect(Poll::Ready(res))) => Ok(res?),
             _ => Err(nb::Error::WouldBlock),
         }
     }
@@ -398,32 +399,22 @@ impl TcpClientStack for EmbeddedNalAdapter {
             return Ok(0);
         }
 
-        let len = buffer.len();
-        // SAFETY: This buffer will not be stored inside the future
-        let buffer = unsafe { &*core::ptr::from_ref(buffer) };
-        assert!(buffer.len() == len);
+        crate::util::extend_ref(buffer, |guard| {
+            let message = match self.message(AdapterMessageIn::Write(guard)) {
+                Ok(message) => message,
+                Err(AdapterMessageIn::Write(guard)) => return (guard, Err(nb::Error::WouldBlock)),
+                Err(_) => unreachable!(),
+            };
 
-        let ptr = buffer.as_ptr();
-
-        let Poll::Ready(message) = self.message(AdapterMessageIn::Write(buffer)) else {
-            return Err(nb::Error::WouldBlock);
-        };
-
-        match message {
-            AdapterMessageOut::Write(Some(Ok(len)), b) => {
-                assert_eq!(b.as_ptr(), ptr);
-                Ok(len)
+            match message {
+                AdapterMessageOut::Write(Some(Ok(len)), b) => (b, Ok(len)),
+                AdapterMessageOut::Write(Some(Err(err)), b) => {
+                    (b, Err(nb::Error::Other(NetError::SendError(err))))
+                }
+                AdapterMessageOut::Write(None, b) => (b, Err(nb::Error::WouldBlock)),
+                _ => unreachable!(),
             }
-            AdapterMessageOut::Write(Some(Err(err)), b) => {
-                assert_eq!(b.as_ptr(), ptr);
-                Err(nb::Error::Other(NetError::SendError(err)))
-            }
-            AdapterMessageOut::Write(None, b) => {
-                assert_eq!(b.as_ptr(), ptr);
-                Err(nb::Error::WouldBlock)
-            }
-            _ => unreachable!(),
-        }
+        })
     }
 
     fn receive(
@@ -435,34 +426,28 @@ impl TcpClientStack for EmbeddedNalAdapter {
             return Ok(0);
         }
 
-        // SAFETY: This buffer will not be stored inside the future
-        let buffer = unsafe { &mut *core::ptr::from_mut(buffer) };
-        let ptr = buffer.as_mut_ptr();
+        extend_mut::extend_mut(buffer, |buffer| {
+            let message = match self.message(AdapterMessageIn::Read(buffer)) {
+                Ok(message) => message,
+                Err(AdapterMessageIn::Read(buffer)) => return (buffer, Err(nb::Error::WouldBlock)),
+                Err(_) => unreachable!(),
+            };
 
-        let Poll::Ready(message) = self.message(AdapterMessageIn::Read(buffer)) else {
-            return Err(nb::Error::WouldBlock);
-        };
-
-        match message {
-            AdapterMessageOut::Read(Some(Ok(0)), b) => {
-                assert_eq!(b.as_mut_ptr(), ptr);
-                Err(nb::Error::Other(NetError::PipeClosed))
+            match message {
+                AdapterMessageOut::Read(Some(Ok(0)), b) => {
+                    (b, Err(nb::Error::Other(NetError::PipeClosed)))
+                }
+                AdapterMessageOut::Read(Some(Ok(len)), b) => {
+                    self.setup_wakers(handle);
+                    (b, Ok(len))
+                }
+                AdapterMessageOut::Read(Some(Err(e)), b) => {
+                    (b, Err(nb::Error::Other(NetError::RecvError(e))))
+                }
+                AdapterMessageOut::Read(None, b) => (b, Err(nb::Error::WouldBlock)),
+                _ => unreachable!(),
             }
-            AdapterMessageOut::Read(Some(Ok(len)), b) => {
-                assert_eq!(b.as_mut_ptr(), ptr);
-                self.setup_wakers(handle);
-                Ok(len)
-            }
-            AdapterMessageOut::Read(Some(Err(e)), b) => {
-                assert_eq!(b.as_mut_ptr(), ptr);
-                Err(nb::Error::Other(NetError::RecvError(e)))
-            }
-            AdapterMessageOut::Read(None, b) => {
-                assert_eq!(b.as_mut_ptr(), ptr);
-                Err(nb::Error::WouldBlock)
-            }
-            _ => unreachable!(),
-        }
+        })
     }
 
     fn close(&mut self, _handle: Self::TcpSocket) -> Result<(), Self::Error> {
@@ -481,6 +466,7 @@ impl TcpError for NetError {
             | Self::TcpConnectError(_) => embedded_nal::TcpErrorKind::PipeClosed,
             #[cfg(feature = "tls")]
             Self::TlsConnectError(_) => embedded_nal::TcpErrorKind::PipeClosed,
+            #[cfg(feature = "tls")]
             Self::SendError(Error::TlsError(_)) | Self::RecvError(Error::TlsError(_)) => {
                 embedded_nal::TcpErrorKind::PipeClosed
             }

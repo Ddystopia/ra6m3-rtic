@@ -97,17 +97,6 @@ fn init_network(
     (Net { iface, sockets }, device, [mqtt, http])
 }
 
-#[expect(dead_code)]
-fn exit() -> ! {
-    use cortex_m_semihosting::debug;
-
-    defmt::info!("Exitter task");
-
-    debug::exit(debug::EXIT_SUCCESS);
-
-    cortex_m::asm::udf();
-}
-
 #[rtic::app(
   device = lm3s6965,
   // device = ra6m3,
