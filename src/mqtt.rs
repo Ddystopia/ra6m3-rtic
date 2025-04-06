@@ -233,7 +233,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
         ))),
         &mut storage.buffer[..],
     );
-    let keepalive_interval = 5.secs();
+    let keepalive_interval = 10.minutes();
     let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
     let conf = conf.keepalive_interval(keepalive_interval.to_secs() as u16);
     let callback = on_message();
