@@ -6,14 +6,16 @@ edition = "2024"
 [dependencies]
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
-ra6m3 = { path = "/home/ddystopia/job/ra/pac/ra6m3", features = ["rt"], optional = true }
+ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/", features = ["ra6m3"], optional = true }
+ra-fsp-ethernet = { path = "/home/ddystopia/job/ra-fsp-ethernet", features = ["ra6m3"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
 rtic = { git = "https://github.com/rtic-rs/rtic", features = ["thumbv7-backend"] }
-defmt = { version = "0.3.8", features = ["encoding-rzcobs"] }
-# defmt = { version = "0.3.8", features = ["encoding-raw"] }
 rtic-monotonics = { version = "2.0.3", features = ["cortex-m-systick"] }
+# defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
+defmt = { version = "0.3.8", features = ["encoding-rzcobs"] }
+log = { version = "0.4.27", default-features = false, optional = true }
 konst = "0.3.16"
 bare-metal = "1.0.0"
 minimq = "0.10.0"
@@ -30,6 +32,7 @@ futures-util = { version = "0.3.31", default-features = false }
 diatomic-waker = { version = "0.2.3", default-features = false }
 rand_chacha = { version = "0.3.1", default-features = false }
 extend_mut = { version = "0.4.2", default-features = false }
+strum = { version = "0.27.1", features = ["derive"], default-features = false }
 
 [profile.release]
 opt-level = 's'
@@ -39,11 +42,14 @@ opt-level = 1
 
 [features]
 # default = ["qemu"]
-default = ["qemu", "tls"]
+default = ["ra6m3", "tls", "log"]
 # default = ["ra6m3"]
 tls = ["dep:embedded-tls"]
-ra6m3 = ["dep:ra6m3"]
+ra6m3 = ["dep:ra-fsp-sys", "dep:ra-fsp-ethernet"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
+# defmt = ["dep:defmt"]
+defmt = []
+log = ["dep:log"]
 
 [dependencies.smoltcp]
 version = "0.12.0"

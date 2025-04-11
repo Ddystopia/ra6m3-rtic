@@ -1,13 +1,43 @@
 [build]
-# target = "thumbv7em-none-eabihf"
-target = "thumbv7em-none-eabi"
+target = "thumbv7em-none-eabihf"
+# target = "thumbv7em-none-eabi"
 
 [target.thumbv7em-none-eabihf]
+runner = "probe-rs run --chip R7FA6M3AH"
 rustflags = [
   "-C", "target-cpu=cortex-m4",
-  "-C", "link-arg=-Tlink.x",
-  "-C", "link-arg=-Tdefmt.x",
+
+  # Use the same linker as CC
+  "-C", "linker=/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc",
+
+  # Linker script
+  "-C", "link-arg=-Tra-fsp-sys.x",
+  # "-C", "link-arg=-Tdefmt.x",
+
+  # Linker flags
+
+  # in cmake there is no -nodefaultlibs
+  "-C", "default-linker-libraries=yes",
+
+  # "-C", "link-arg=--fail-me",
+  "-C", "link-arg=--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf",
+  "-C", "link-arg=-Wall",
+  "-C", "link-arg=-mlittle-endian",
+  "-C", "link-arg=-mthumb",
+  "-C", "link-arg=-mcpu=cortex-m4",
+  "-C", "link-arg=-mfloat-abi=hard",
+  "-C", "link-arg=-mfpu=fpv4-sp-d16",
+  "-C", "link-arg=-mno-unaligned-access",
+  "-C", "link-arg=--std=gnu11",
+  "-C", "link-arg=-ffunction-sections",
+  "-C", "link-arg=-fdata-sections",
+  "-C", "link-arg=-Woverride-init",
+  "-C", "link-arg=-fno-short-enums",
+  "-C", "link-arg=-gdwarf-4",
+  "-C", "link-arg=-Wl,--build-id=none", # important!! .text is misplaced by 24 bytes if not set
+  "-C", "link-arg=-Wl,-no-enum-size-warning",
 ]
+
 
 [target.thumbv7em-none-eabi]
 rustflags = [
@@ -23,7 +53,19 @@ rustflags = [
 # build-std-features = ["optimize_for_size", "panic_immediate_abort"]
 
 [env]
-CC = "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
+# qemu
+# CC = "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
+CC = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
+LD = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
+AR = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-ar"
+FSP_CFG = "/home/ddystopia/job/rtic_ra6m3_led_blink/fsp_cfg/"
+BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf"
+
+CFLAGS = """\
+  -isysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf \
+  -Wall -mlittle-endian -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mno-unaligned-access --std=gnu11 \
+  -ffunction-sections -fdata-sections -Woverride-init -fno-short-enums"""
+
 DEFMT_LOG = "trace,smoltcp=info,embedded_tls=info"
 MAC = "fe:e3:a9:97:ad:ab"
 IP_V4 = "192.168.69.100/24"
@@ -34,3 +76,4 @@ MQTT_CLIENT_ID = "rtic"
 MQTT_BROKER_IP = "192.168.69.20"
 MQTT_BROKER_PORT_TLS = "8883"
 MQTT_BROKER_PORT_TCP = "1883"
+

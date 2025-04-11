@@ -7,14 +7,13 @@ use smoltcp::time::Instant;
 use lm3s6965evb_ethernet_sys::*;
 
 use crate::MAC;
+use crate::log::*;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[allow(dead_code)]
-pub enum InterruptCause {
-    TransmitComplete,
-    Receive,
-    TransmitError,
-    ReceiveError,
+pub struct InterruptCause {
+    receive: bool,
+    transmit_complete: bool,
 }
 
 const MTU: usize = 1500;
@@ -136,34 +135,34 @@ unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
         if irq_status & ETH_INT_PHY != 0 {
             let mr1 = EthernetPHYRead(ETH_BASE, PHY_MR1 as u8);
             if mr1 & PHY_MR1_LINK != 0 {
-                defmt::info!("Link up");
+                info!("Link up");
                 // priv_stellaris_eth_dev.link_up = true;
                 // netdev->event_callback(netdev, NETDEV_EVENT_LINK_UP);
             } else {
-                defmt::info!("Link down");
+                info!("Link down");
                 // priv_stellaris_eth_dev.link_up = false;
                 // netdev->event_callback(netdev, NETDEV_EVENT_LINK_DOWN);
             }
         }
     }
     if irq_status & ETH_INT_RXOF != 0 || irq_status & ETH_INT_RXER != 0 {
-        defmt::warn!("RXOF or RX");
+        warn!("RXOF or RX");
         // netdev->event_callback(netdev, NETDEV_EVENT_RX_TIMEOUT);
     }
 
     if irq_status & ETH_INT_RX != 0 {
         // netdev->event_callback(netdev, NETDEV_EVENT_RX_COMPLETE);
-        // defmt::info!("RX Complete"); // New packet arrived
+        // info!("RX Complete"); // New packet arrived
     }
 
     if irq_status & ETH_INT_TX != 0 {
         // netdev->event_callback(netdev, NETDEV_EVENT_TX_COMPLETE);
-        // defmt::info!("TX Complete");
+        // info!("TX Complete");
     }
 
     if irq_status & ETH_INT_TXER != 0 {
         // netdev->event_callback(netdev, NETDEV_EVENT_TX_TIMEOUT);
-        defmt::warn!("TX Error");
+        warn!("TX Error");
     }
 
     // netdev->event_callback(netdev, NETDEV_EVENT_ISR);
@@ -172,7 +171,10 @@ unsafe fn isr_handler_inner(_device: &mut Dev) -> Option<InterruptCause> {
     cortex_m::asm::dsb();
     cortex_m::asm::dmb();
 
-    Some(InterruptCause::Receive)
+    Some(InterruptCause {
+        receive: true,
+        transmit_complete: false,
+    })
 }
 
 fn disable() {
@@ -193,7 +195,7 @@ fn packet_get(buf: &mut [u8; MTU]) -> isize {
     let len = unsafe { EthernetPacketGetNonBlocking(ETH_BASE, ptr, len) };
 
     if len == 0 {
-        defmt::warn!("No packet available");
+        warn!("No packet available");
         return 0;
     }
 
@@ -215,6 +217,6 @@ fn send(packet: &[u8]) {
     assert!(ret > 0);
 
     if ret == 0 {
-        defmt::warn!("Packet sent while no space was available");
+        warn!("Packet sent while no space was available");
     }
 }

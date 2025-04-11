@@ -13,9 +13,35 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use cortex_m::{interrupt, register};
 use cortex_m_semihosting::hio;
+use rtic_monotonics::Monotonic;
+
+defmt::timestamp!("{=f32}", (crate::Mono::now().ticks() / 10) as f32 / 100.0);
+
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)*) => { defmt::trace!($($arg)*) };
+}
+#[macro_export]
+macro_rules! debug {
+    ($($arg:tt)*) => { defmt::debug!($($arg)*) };
+}
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => { defmt::info!($($arg)*) };
+}
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)*) => { defmt::warn!($($arg)*) };
+}
+#[macro_export]
+macro_rules! error {
+    ($($arg:tt)*) => { defmt::error!($($arg)*) };
+}
 
 #[defmt::global_logger]
 struct Logger;
+
+pub fn init() {}
 
 static TAKEN: AtomicBool = AtomicBool::new(false);
 static INTERRUPTS_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -35,25 +61,6 @@ fn panic_handler(info: &core::panic::PanicInfo<'_>) -> ! {
         cortex_m::asm::bkpt()
     }
 }
-
-// Idk it does not generate a panic handler
-// #[defmt::panic_handler]
-// pub fn defmt_panic() -> ! {
-//     extern crate cortex_m_semihosting as sh;
-//
-//     // leave out the printing part here
-//     interrupt::disable();
-//
-//     match () {
-//         // Exit the QEMU process
-//         () => sh::debug::exit(sh::debug::EXIT_FAILURE),
-//         // OK to fire a breakpoint here because we know the microcontroller is connected to a
-//         // debugger
-//         // () => asm::bkpt(),
-//     }
-//
-//     loop {}
-// }
 
 unsafe impl defmt::Logger for Logger {
     fn acquire() {

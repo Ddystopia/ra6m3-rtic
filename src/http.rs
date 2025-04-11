@@ -7,6 +7,7 @@ use crate::{
     poll_share::{self, TokenProvider},
     socket::TcpSocket,
     socket_storage::HTTP_BUFFER_SIZE,
+    log::*,
 };
 
 // todo: use https://docs.rs/smoltcp/latest/smoltcp/socket/tcp/struct.Socket.html#method.set_timeout and others
@@ -60,11 +61,11 @@ async fn handle_connection(
     });
 
     match picoserve::serve_with_state(app, Timer, &config, buf, socket, &()).await {
-        Ok(count) => defmt::trace!("Handled {} requests", count),
-        Err(picoserve::Error::Read(e)) => defmt::error!("Failed to serve with Read Error: {}", e),
-        Err(picoserve::Error::Write(e)) => defmt::error!("Failed to serve with Write Error: {}", e),
-        Err(picoserve::Error::ReadTimeout) => defmt::error!("Failed to serve with Read Timeout"),
-        Err(picoserve::Error::WriteTimeout) => defmt::error!("Failed to serve with Write Timeout"),
+        Ok(count) => trace!("Handled {} requests", count),
+        Err(picoserve::Error::Read(e)) => error!("Failed to serve with Read Error: {}", e),
+        Err(picoserve::Error::Write(e)) => error!("Failed to serve with Write Error: {}", e),
+        Err(picoserve::Error::ReadTimeout) => error!("Failed to serve with Read Timeout"),
+        Err(picoserve::Error::WriteTimeout) => error!("Failed to serve with Write Timeout"),
     }
 }
 

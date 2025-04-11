@@ -17,6 +17,7 @@ use smoltcp::{iface::SocketHandle, socket::tcp};
 
 use crate::{
     Mono,
+    log::*,
     poll_share::TokenProvider,
     socket::{self, TcpSocket},
     util::ExtendRefGuard,
@@ -61,14 +62,14 @@ pub struct EmbeddedNalAdapter {
     waiting_for_message: &'static Cell<bool>,
 }
 
-#[derive(Debug, defmt::Format)]
+#[derive(Debug, defmt::Format, strum::Display)]
 pub enum Error {
     TcpError(socket::Error),
     #[cfg(feature = "tls")]
     TlsError(TlsError),
 }
 
-#[derive(Debug, defmt::Format)]
+#[derive(Debug, defmt::Format, strum::Display)]
 pub enum NetError {
     PipeClosed,
     TcpConnectError(socket::ConnectError),
@@ -176,8 +177,8 @@ async fn handle_tls_session(
 
                 let res = match tls_socket.close().await {
                     Ok(()) => Ok(()),
-                    Err(err) => {
-                        defmt::error!("TLS close error: {}", err);
+                    Err(_err) => {
+                        error!("TLS close error");
                         let mut tcp_socket = TcpSocket::new(net, handle);
                         tcp_socket.abort();
                         Err(NetError::PipeClosed)

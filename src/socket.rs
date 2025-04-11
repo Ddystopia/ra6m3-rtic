@@ -15,9 +15,10 @@ use smoltcp::{
 };
 
 use crate::poll_share::{NetMutex, TokenProvider};
+use crate::log::*;
 
 /// Error returned by TcpSocket read/write functions.
-#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format, strum::Display)]
 pub enum Error {
     /// The connection was reset.
     ///
@@ -26,7 +27,7 @@ pub enum Error {
 }
 
 /// Error returned by [`TcpSocket::connect`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format, strum::Display)]
 pub enum ConnectError {
     /// The socket is already connected or listening.
     InvalidState,
@@ -39,7 +40,7 @@ pub enum ConnectError {
 }
 
 /// Error returned by [`TcpSocket::accept`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format, strum::Display)]
 pub enum AcceptError {
     /// The socket is already connected or listening.
     InvalidState,
@@ -196,7 +197,7 @@ impl<M: NetMutex> SocketInner<M> {
                             Ok(r) => Ok(r),
                         })
                     } else {
-                        defmt::warn!("Poll after completion");
+                        warn!("Poll after completion");
                         Poll::Pending
                     }
                 }
@@ -231,7 +232,7 @@ impl<M: NetMutex> SocketInner<M> {
                             Ok(r) => Ok(r),
                         })
                     } else {
-                        defmt::warn!("Poll after completion");
+                        warn!("Poll after completion");
                         Poll::Pending
                     }
                 }

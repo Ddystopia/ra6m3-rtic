@@ -5,6 +5,7 @@ use core::{
     task::{RawWaker, RawWakerVTable, Waker},
 };
 
+use crate::log::*;
 use cortex_m::interrupt::Mutex;
 
 #[cfg(feature = "qemu")]
@@ -12,6 +13,15 @@ pub fn exit() -> ! {
     use cortex_m::asm::bkpt;
     use cortex_m_semihosting::debug;
     debug::exit(debug::EXIT_SUCCESS);
+
+    loop {
+        bkpt();
+    }
+}
+
+#[cfg(feature = "ra6m3")]
+pub fn exit() -> ! {
+    use cortex_m::asm::bkpt;
 
     loop {
         bkpt();
@@ -54,14 +64,14 @@ pub fn extend_ref<T: ?Sized, R>(
             None
         }
     }) else {
-        defmt::error!("ExtendRefGuard::extend_ref: somehow 2**128 ids are exhausted");
+        error!("ExtendRefGuard::extend_ref: somehow 2**128 ids are exhausted");
         exit();
     };
 
     let (guard, ret) = f(ExtendRefGuard { id, value });
 
     if guard.id != id || !core::ptr::eq(guard.value, value) {
-        defmt::error!("ExtendRefGuard::extend_ref: id mismatch");
+        error!("ExtendRefGuard::extend_ref: id mismatch");
 
         exit();
     }

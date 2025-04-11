@@ -4,6 +4,7 @@ use crate::{
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS},
     poll_share::{self, TokenProvider},
     socket::{self},
+    log::*,
 };
 use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError, TlsArgs};
 use minimq::{ConfigBuilder, Publication};
@@ -206,7 +207,7 @@ fn on_message() -> OnMessageRtic {
      _props: &minimq::types::Properties<'_>|
      -> Result<(), minimq::Error<NetError>> {
         let msg = core::str::from_utf8(bytes).unwrap();
-        defmt::info!("Received message on topic '{}': {}", topic, msg);
+        info!("Received message on topic '{}': {}", topic, msg);
 
         let publication = Publication::new("/rtic_mqtt/hello_world_response", "Hello from RTIC");
         match client.publish(publication) {
@@ -264,19 +265,19 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
         match try {
             mqtt.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
                 .await?;
-            defmt::info!("Subscribed to topics");
+            info!("Subscribed to topics");
             mqtt.join(keepalive_interval).await?
         } {
             Err(minimq::Error::Network(NetError::TcpConnectError(
                 socket::ConnectError::ConnectionReset,
             ))) => {
-                defmt::info!("Failed to connect to broker, retrying...");
+                info!("Failed to connect to broker, retrying...");
             }
-            Err(minimq::Error::Network(other)) => defmt::error!("Minimq Network error: {}", other),
-            Err(minimq::Error::SessionReset) => defmt::warn!("Mqtt Session Reset"),
+            Err(minimq::Error::Network(other)) => error!("Minimq Network error: {}", other),
+            Err(minimq::Error::SessionReset) => warn!("Mqtt Session Reset"),
             Err(minimq::Error::NotReady) => unreachable!(),
             // `minimq::Error` is non-exhaustive + other variants are dead code in 0.10.0
-            Err(_other) => defmt::error!("Unknown mqtt error"),
+            Err(_other) => error!("Unknown mqtt error"),
         }
     }
 }
