@@ -14,12 +14,19 @@ mod logger_setup;
 #[path = "net_semihosting.rs"]
 mod net_device;
 
+// todo: .uninit section ends up in the binary for some reason
+// todo: goes to NMI if without opt
+// todo: if link is down for long, needs reset for ping to work
+
 #[cfg(all(feature = "ra6m3", feature = "log"))]
 #[path = "log_ra6m3.rs"]
 mod logger_setup;
 #[cfg(feature = "ra6m3")]
 #[path = "net_ra6m3.rs"]
 mod net_device;
+
+type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
+type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
 
 mod log {
     #![allow(unused_imports)]
@@ -45,12 +52,13 @@ use conf::{
     SYS_TICK_HZ,
 };
 use diatomic_waker::{DiatomicWaker, WakeSinkRef, WakeSourceRef};
+#[cfg(feature = "ra6m3")]
+use net_device::{Buffers, ETH_N_RX_DESC, ETH_N_TX_DESC};
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
     iface::{Config, Interface, SocketHandle, SocketSet},
     socket::tcp,
-    time::Instant,
     wire::{self, HardwareAddress, IpCidr},
 };
 
@@ -66,21 +74,23 @@ pub struct Net {
     sockets: SocketSet<'static>,
 }
 
-fn smol_now() -> Instant {
+fn smol_now() -> smoltcp::time::Instant {
     let ticks = Mono::now().ticks() as i64 * 1_000_000 / CLOCK_HZ as i64;
-    Instant::from_micros(ticks)
+    smoltcp::time::Instant::from_micros(ticks)
 }
 
 fn init_network(
-    #[cfg(feature = "ra6m3")] etherc0: ra_fsp_sys::ETHERC0,
+    #[cfg(feature = "ra6m3")] etherc0: ra_fsp_sys::EDMAC0,
+    #[cfg(feature = "ra6m3")] nvic: &mut cortex_m::peripheral::NVIC,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
+    #[cfg(feature = "ra6m3")] tx_buffers: &'static mut Buffers<ETH_N_TX_DESC>,
+    #[cfg(feature = "ra6m3")] rx_buffers: &'static mut Buffers<ETH_N_RX_DESC>,
 ) -> (Net, net_device::Dev, [SocketHandle; 2]) {
-    let mut device = net_device::Dev::new(
-        cs,
-        #[cfg(feature = "ra6m3")]
-        etherc0,
-    );
+    #[cfg(feature = "ra6m3")]
+    let mut device = net_device::Dev::new(cs, nvic, tx_buffers, rx_buffers, etherc0);
+    #[cfg(not(feature = "ra6m3"))]
+    let mut device = net_device::Dev::new(cs);
     let address = smoltcp::wire::EthernetAddress(MAC);
     let conf = Config::new(HardwareAddress::Ethernet(address));
 
@@ -98,8 +108,13 @@ fn init_network(
     let http = add_tcp_socket(http);
 
     iface.update_ip_addrs(|ip_addrs| {
+        trace!("Adding IP addresses");
         ip_addrs.push(IpCidr::new(IP_V4, IP_V4_NETMASK)).unwrap();
+        #[cfg(feature = "ra6m3")]
+        info!("IPV4: {IP_V4}/{IP_V4_NETMASK}");
         ip_addrs.push(IpCidr::new(IP_V6, IP_V6_NETMASK)).unwrap();
+        #[cfg(feature = "ra6m3")]
+        info!("IPV6: {IP_V6}");
         let loopback = wire::IpAddress::v6(0xfe80, 0, 0, 0, 0, 0, 0, 1);
         ip_addrs.push(IpCidr::new(loopback, 64)).unwrap();
     });
@@ -127,7 +142,14 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
 
     #[cfg(feature = "ra6m3")]
-    let (mut net, device, sockets) = init_network(ctx.device.ETHERC0, ctx.cs, ctx.local.sockets);
+    let (mut net, device, sockets) = init_network(
+        ctx.device.EDMAC0,
+        &mut ctx.core.NVIC,
+        ctx.cs,
+        ctx.local.sockets,
+        ctx.local.tx_buffers,
+        ctx.local.rx_buffers,
+    );
     #[cfg(feature = "qemu")]
     let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
     let [mqtt_socket_handle, http_socket_handle] = sockets;
@@ -142,6 +164,10 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     app::waiter::spawn().ok();
     app::mqtt_task::spawn(mqtt_socket_handle).ok();
     app::http_task::spawn(http_socket_handle).ok();
+    #[cfg(feature = "ra6m3")]
+    app::network_link_poll::spawn().ok();
+    #[cfg(feature = "ra6m3")]
+    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).ok();
 
     info!("Init done");
 
@@ -181,7 +207,15 @@ async fn poll_network(mut ctx: app::poll_network::Context<'_>) {
 
     (&mut *net, &mut *dev).lock(|net, dev| net.iface.poll(smol_now(), dev, &mut net.sockets));
 
-    let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
+    let mut poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
+
+    // fixme: why smoltcp returns poll_at = 0 ?
+    // fixme: mqtt not reconnects if rumqttd dies
+    if let Some(poll_at_v) = poll_at {
+        if poll_at_v < smol_now() {
+            poll_at = None;
+        }
+    }
 
     ctx.shared
         .next_net_poll
@@ -198,7 +232,7 @@ async fn network_poll_scheduler(
 
     enum Event {
         Timeout(()),
-        NewTimeout(Instant),
+        NewTimeout(smoltcp::time::Instant),
     }
 
     loop {
@@ -220,9 +254,10 @@ async fn network_poll_scheduler(
                 delay = None
             }
             Event::NewTimeout(at) => {
+                crate::info!("New Delay: {} micros (now is {} ticks)", at.total_micros(), Mono::now().ticks());
                 let total_micros = at.total_micros();
                 let total_millis_round_up = ((total_micros + 999) / 1000) as u32;
-                let next = fugit::Instant::<u32, 1, 1000>::from_ticks(total_millis_round_up);
+                let next = Instant::from_ticks(total_millis_round_up);
                 delay = Some(Mono::delay_until(next));
             }
         }
@@ -251,7 +286,7 @@ mod qemu_app {
         pub struct Shared {
             pub net: Net,
             pub device: net_device::Dev,
-            pub next_net_poll: Option<Instant>,
+            pub next_net_poll: Option<smoltcp::time::Instant>,
         }
 
         #[local]
@@ -327,7 +362,7 @@ mod ra6m3_app {
         pub struct Shared {
             pub net: Net,
             pub device: net_device::Dev,
-            pub next_net_poll: Option<Instant>,
+            pub next_net_poll: Option<smoltcp::time::Instant>,
         }
 
         #[local]
@@ -335,7 +370,12 @@ mod ra6m3_app {
             pub net_poll_schedule_tx: WakeSourceRef<'static>,
         }
 
-        #[init(local = [sockets: SocketStorage = SocketStorage::new(), net_waker: DiatomicWaker = DiatomicWaker::new()])]
+        #[init(local = [
+            sockets: SocketStorage = SocketStorage::new(),
+            net_waker: DiatomicWaker = DiatomicWaker::new()
+            rx_buffers: Buffers<ETH_N_RX_DESC> = Buffers::new(),
+            tx_buffers: Buffers<ETH_N_TX_DESC> = Buffers::new()
+        ])]
         fn init(ctx: init::Context) -> (Shared, Local) {
             super::init(ctx)
         }
@@ -355,14 +395,25 @@ mod ra6m3_app {
             http::http(ctx, socket).await
         }
 
-        // todo: is there a reason to give this task higher priority?
-        #[task(binds = IEL0, priority = 2, shared = [device])]
-        fn ethernet_isr(mut ctx: ethernet_isr::Context) {
-            let cause = ctx.shared.device.lock(net_device::isr_handler);
+        #[task(priority = 3, shared = [device])]
+        async fn network_poll_callback(
+            mut ctx: network_poll_callback::Context,
+            args: net_device::EthernetCallbackArgs,
+        ) {
+            let cause = ctx
+                .shared
+                .device
+                .lock(|d| net_device::ethernet_callback(d, args));
 
-            if cause.map_or(false, |cause| cause.receive) {
+            if cause.is_some_and(|cause| cause.receive || cause.transmits) {
                 NET_WAKER.wake_by_ref()
             }
+        }
+
+        // todo: is there a reason to give this task higher priority?
+        #[task(binds = IEL0, priority = 2)]
+        fn ethernet_isr(_ctx: ethernet_isr::Context) {
+            net_device::ethernet_isr_handler();
         }
 
         #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
@@ -376,6 +427,40 @@ mod ra6m3_app {
             sink: WakeSinkRef<'static>,
         ) {
             super::network_poll_scheduler(ctx, sink).await
+        }
+
+        #[task(priority = 1, shared = [device])]
+        async fn network_link_poll(mut ctx: network_link_poll::Context) {
+            let mut next = Mono::now();
+            loop {
+                next += 10.millis();
+                Mono::delay_until(next).await;
+                ctx.shared.device.lock(|dev| dev.poll_link());
+            }
+        }
+
+        #[task(priority = 1)]
+        async fn blinky(_ctx: blinky::Context, port1: ra_fsp_sys::PORT1, port4: ra_fsp_sys::PORT4) {
+            const PERIOD_MS: u32 = 100;
+
+            let mut next = Mono::now();
+            let mut i: usize = 0;
+
+            port1.pcntr1().write(|w| w.pdr()._1().podr()._1());
+
+            loop {
+                let phase = i % 8;
+
+                if phase == 0 || phase == 2 {
+                    port4.pcntr1().write(|w| w.pdr()._1().podr()._1());
+                } else {
+                    port4.pcntr1().write(|w| w.pdr()._1().podr()._0());
+                }
+
+                i = i.wrapping_add(1);
+                next += PERIOD_MS.millis();
+                Mono::delay_until(next).await;
+            }
         }
 
         #[idle]

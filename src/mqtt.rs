@@ -2,16 +2,13 @@ use core::task::{Poll, Waker};
 
 use crate::{
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS},
+    log::*,
     poll_share::{self, TokenProvider},
     socket::{self},
-    log::*,
 };
 use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError, TlsArgs};
 use minimq::{ConfigBuilder, Publication};
-use rtic_monotonics::{
-    Monotonic,
-    fugit::{self, ExtU32},
-};
+use rtic_monotonics::{Monotonic, fugit::ExtU32};
 use smoltcp::iface::SocketHandle;
 
 #[cfg(feature = "tls")]
@@ -148,7 +145,7 @@ impl<F: OnMessage> Mqtt<F> {
 
     pub async fn join(
         &mut self,
-        keepalive_interval: fugit::Duration<u32, 1, 1000>,
+        keepalive_interval: crate::Duration,
     ) -> Result<!, minimq::Error<NetError>> {
         loop {
             let poller = core::future::poll_fn(|_| self.poll());

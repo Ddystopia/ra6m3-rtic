@@ -6,16 +6,15 @@ edition = "2024"
 [dependencies]
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
-ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/", features = ["ra6m3"], optional = true }
+ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/", features = ["ra6m3", "mod-r_ether_phy_target_ksz8091rnb"], optional = true }
 ra-fsp-ethernet = { path = "/home/ddystopia/job/ra-fsp-ethernet", features = ["ra6m3"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
 rtic = { git = "https://github.com/rtic-rs/rtic", features = ["thumbv7-backend"] }
 rtic-monotonics = { version = "2.0.3", features = ["cortex-m-systick"] }
-# defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
-defmt = { version = "0.3.8", features = ["encoding-rzcobs"] }
-log = { version = "0.4.27", default-features = false, optional = true }
+defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
+log = { version = "0.4.27", features = ["release_max_level_info"], default-features = false, optional = true }
 konst = "0.3.16"
 bare-metal = "1.0.0"
 minimq = "0.10.0"
@@ -44,14 +43,13 @@ opt-level = 1
 
 [features]
 # default = ["qemu"]
-default = ["ra6m3", "tls", "log"]
+default = ["ra6m3", "log", "tls"]
 # default = ["ra6m3"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra-fsp-sys", "dep:ra-fsp-ethernet"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
-# defmt = ["dep:defmt"]
-defmt = []
-log = ["dep:log"]
+defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
+log = ["dep:log", "dep:rtt-target", "smoltcp/log"]
 
 [dependencies.smoltcp]
 version = "0.12.0"
@@ -63,7 +61,6 @@ features = [
     "proto-ipv6",
     "socket-udp",
     "socket-tcp",
-    "defmt",
     # "verbose",
     #
     "iface-max-addr-count-3",

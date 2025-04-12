@@ -58,14 +58,14 @@ rustflags = [
 CC = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
 LD = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
 AR = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-ar"
-FSP_CFG = "/home/ddystopia/job/rtic_ra6m3_led_blink/fsp_cfg/"
+FSP_CFG = "/home/ddystopia/code/ra6m3-rtic/fsp_cfg/"
 BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf"
 
 CFLAGS = """\
   -isysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf \
   -Wall -mlittle-endian -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mno-unaligned-access --std=gnu11 \
   -ffunction-sections -fdata-sections -Woverride-init -fno-short-enums"""
-
+# ETHER_PHY_CFG_TARGET_KSZ8091RNB_ENABLE
 DEFMT_LOG = "trace,smoltcp=info,embedded_tls=info"
 MAC = "fe:e3:a9:97:ad:ab"
 IP_V4 = "192.168.69.100/24"

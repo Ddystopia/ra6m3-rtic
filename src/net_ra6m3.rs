@@ -1,39 +1,96 @@
 use crate::log::*;
+use core::marker::PhantomPinned;
 use core::mem::MaybeUninit;
+use core::ops::{Deref, DerefMut};
+use core::pin::Pin;
 use core::ptr;
 
-// todo: map
+// todo: move map from init.c here
 //       [VECTOR_NUMBER_EDMAC0_EINT]             = ELC_EVENT_EDMAC0_EINT,
 
 use bare_metal::CriticalSection;
+use ra_fsp_sys::Interrupt;
 use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 
 const MTU: usize = 1500;
 
+pub const ETH_N_TX_DESC: usize = 4;
+pub const ETH_N_RX_DESC: usize = 4;
+
+struct EtherInstane(*const ra_fsp_ethernet::ether_instance_t);
+
+#[derive(Debug, Clone, Copy)]
+pub struct EthernetCallbackArgs {
+    pub channel: u32,
+    pub event: ra_fsp_ethernet::ether_event_t,
+    pub status_ecsr: u32,
+    pub status_eesr: u32,
+}
+
+#[repr(C, align(32))]
+pub struct Buffer([u8; ETHER_PACKET_SIZE]);
+
+pub struct Buffers<const N: usize>([Buffer; N], PhantomPinned);
+
 pub struct Dev {
-    rx: [u8; MTU],
-    tx: [u8; MTU],
-    tx_free: bool,
+    rx: Pin<&'static mut Buffers<ETH_N_RX_DESC>>,
+    tx: &'static mut Buffers<ETH_N_TX_DESC>,
+    tx_available: [bool; ETH_N_TX_DESC],
 }
 
 pub struct InterruptCause {
     pub receive: bool,
-    pub transmit_complete: bool,
+    pub transmits: bool,
 }
 
-pub struct EthernetRxToken<'a>(&'a mut [u8; MTU]);
-pub struct EthernetTxToken<'a>(&'a mut [u8; MTU]);
+pub struct EthernetRxToken<'a>(&'a mut [u8]);
+pub struct EthernetTxToken<'a>(&'a mut [u8; ETHER_PACKET_SIZE], &'a mut bool);
+
+impl<const N: usize> Buffers<N> {
+    pub const fn new() -> Self {
+        Self([const { Buffer([0; ETHER_PACKET_SIZE]) }; N], PhantomPinned)
+    }
+}
+
+impl Deref for Buffers<ETH_N_TX_DESC> {
+    type Target = [Buffer; ETH_N_TX_DESC];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl DerefMut for Buffers<ETH_N_TX_DESC> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 impl Dev {
-    pub fn new(cs: CriticalSection<'_>, _: ra_fsp_sys::ETHERC0) -> Self {
-        init(cs, crate::MAC);
+    pub fn new(
+        cs: CriticalSection<'_>,
+        nvic: &mut cortex_m::peripheral::NVIC,
+        tx_buffers: &'static mut Buffers<ETH_N_TX_DESC>,
+        rx_buffers: &'static mut Buffers<ETH_N_RX_DESC>,
+        _: ra_fsp_sys::EDMAC0,
+    ) -> Self {
+        init(cs, nvic, crate::MAC);
 
         Self {
-            rx: [0; MTU],
-            tx: [0; MTU],
-            tx_free: true,
+            rx: Pin::static_mut(rx_buffers),
+            tx: tx_buffers,
+            tx_available: [true; ETH_N_TX_DESC],
         }
+    }
+
+    pub fn poll_link(&mut self) {
+        if ETH0.get_ctrl_open() != 0 {
+            ETH0.link_process();
+        }
+    }
+
+    fn send_packet_idx(&self) -> Option<usize> {
+        self.tx_available.iter().position(|&x| x)
     }
 }
 
@@ -45,16 +102,34 @@ impl Device for Dev {
     //       multiple tokens.
 
     fn receive(&mut self, _: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if is_packet_available() && is_send_space_available() {
-            Some((EthernetRxToken(&mut self.rx), EthernetTxToken(&mut self.tx)))
-        } else {
-            None
+        if !ETH0.is_up() {
+            return None;
+        }
+
+        let tx = self.send_packet_idx()?;
+        match ETH0.read() {
+            Ok(buf) => Some((
+                EthernetRxToken(buf),
+                EthernetTxToken(&mut self.tx[tx].0, &mut self.tx_available[tx]),
+            )),
+            Err(ra_fsp_ethernet::e_fsp_err_FSP_ERR_ETHER_ERROR_NO_DATA) => None,
+            Err(err) => {
+                error!("Ethernet read error: {}", err);
+                None
+            }
         }
     }
 
     fn transmit(&mut self, _: Instant) -> Option<Self::TxToken<'_>> {
-        if is_send_space_available() {
-            Some(EthernetTxToken(&mut self.rx))
+        if !ETH0.is_up() {
+            return None;
+        }
+
+        if let Some(rx) = self.send_packet_idx() {
+            Some(EthernetTxToken(
+                &mut self.tx[rx].0,
+                &mut self.tx_available[rx],
+            ))
         } else {
             None
         }
@@ -75,10 +150,13 @@ impl RxToken for EthernetRxToken<'_> {
     where
         F: FnOnce(&[u8]) -> R,
     {
-        let len = packet_get(self.0);
-        let len = usize::try_from(len).unwrap_or(MTU);
+        f(self.0)
+    }
+}
 
-        f(&self.0[..len])
+impl Drop for EthernetRxToken<'_> {
+    fn drop(&mut self) {
+        assert!(ETH0.rx_buffer_update(self.0.as_mut_ptr()) == 0);
     }
 }
 
@@ -87,39 +165,60 @@ impl TxToken for EthernetTxToken<'_> {
     where
         F: FnOnce(&mut [u8]) -> R,
     {
-        assert!(length <= MTU);
-
         let result = f(&mut self.0[..length]);
 
-        assert!(is_send_space_available());
+        if length < 60 {
+            self.0[length..60].fill(0);
+        }
+        let packet: &[u8] = &self.0[..length.max(60)];
+        let ret = ETH0.write(packet.as_ptr(), packet.len() as u32);
 
-        send(&self.0[..length]);
+        if ret == ra_fsp_ethernet::e_fsp_err_FSP_ERR_ETHER_ERROR_LINK {
+            return result;
+        }
+
+        assert!(ret == 0);
+
+        *self.1 = false; // that tx buffer has been passed to the driver
 
         result
     }
 }
-
-extern "C" fn callback(_: *mut ra_fsp_ethernet::st_ether_callback_args) {}
-
-unsafe extern "C" {
-    fn IEL0();
-}
-
-const IP_PACKET_SIZE: u32 = MTU as u32 - 18;
-
-const ISR: u32 = 0;
-
-const ETH_N_TX_DESC: usize = 4;
-const ETH_N_RX_DESC: usize = 4;
 
 #[repr(C, align(16))]
 struct EtherInstanceDescriptor<const N: usize> {
     descriptors: MaybeUninit<[ra_fsp_ethernet::ether_instance_descriptor_t; N]>,
 }
 
+static mut PHY0_CTRL: MaybeUninit<ra_fsp_ethernet::ether_phy_instance_ctrl_t> =
+    MaybeUninit::zeroed();
+
+// todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
+//       that way, we don't need to have a large buffer for smaller stuff, right? Not sure
+//       now it interacts with the limit (8) of buffers.
+
+static PHY0_CFG: ra_fsp_ethernet::ether_phy_cfg_t = ra_fsp_ethernet::ether_phy_cfg_t {
+    channel: 0,
+    phy_lsi_address: 0,
+    phy_reset_wait_time: 0x00020000,
+    mii_bit_access_wait_time: 8,
+    // idk why it doesn work with KSZ8091RNB, manual says it has it
+    // phy_lsi_type: ra_fsp_ethernet::e_ether_phy_lsi_type_ETHER_PHY_LSI_TYPE_KSZ8091RNB,
+    phy_lsi_type: ra_fsp_ethernet::e_ether_phy_lsi_type_ETHER_PHY_LSI_TYPE_DEFAULT,
+    flow_control: ra_fsp_ethernet::e_ether_phy_flow_control_ETHER_PHY_FLOW_CONTROL_DISABLE,
+    mii_type: ra_fsp_ethernet::e_ether_phy_mii_type_ETHER_PHY_MII_TYPE_RMII,
+    p_context: ptr::null_mut(),
+    p_extend: ptr::null_mut(),
+};
+
+static PHY0: ra_fsp_ethernet::ether_phy_instance_t = ra_fsp_ethernet::ether_phy_instance_t {
+    p_ctrl: (&raw mut PHY0_CTRL).cast(),
+    p_cfg: &raw const PHY0_CFG,
+    p_api: &raw const ra_fsp_ethernet::g_ether_phy_on_ether_phy,
+};
+
 // #if (BSP_FEATURE_TZ_HAS_TRUSTZONE == 1) && (BSP_TZ_SECURE_BUILD != 1) && (BSP_TZ_NONSECURE_BUILD != 1)
 //    place in ".ns_buffer.eth" section
-
 #[cfg_attr(any(), link_section = ".ns_buffer.eth")]
 static mut MAC0_TX_DESCRIPTORS: EtherInstanceDescriptor<ETH_N_TX_DESC> = EtherInstanceDescriptor {
     descriptors: MaybeUninit::uninit(),
@@ -128,6 +227,8 @@ static mut MAC0_TX_DESCRIPTORS: EtherInstanceDescriptor<ETH_N_TX_DESC> = EtherIn
 static mut MAC0_RX_DESCRIPTORS: EtherInstanceDescriptor<ETH_N_RX_DESC> = EtherInstanceDescriptor {
     descriptors: MaybeUninit::uninit(),
 };
+
+const ETHER_PACKET_SIZE: usize = 1568;
 
 static CONF_EXTEND: ra_fsp_ethernet::ether_extended_cfg_t = ra_fsp_ethernet::ether_extended_cfg_t {
     p_rx_descriptors: (&raw mut MAC0_RX_DESCRIPTORS).cast(),
@@ -140,37 +241,25 @@ static mut CONF: ra_fsp_ethernet::ether_cfg_t = ra_fsp_ethernet::ether_cfg_t {
     multicast: ra_fsp_ethernet::e_ether_multicast_ETHER_MULTICAST_ENABLE,
     promiscuous: ra_fsp_ethernet::e_ether_promiscuous_ETHER_PROMISCUOUS_ENABLE,
     flow_control: ra_fsp_ethernet::e_ether_flow_control_ETHER_FLOW_CONTROL_ENABLE,
-    padding: ra_fsp_ethernet::e_ether_padding_ETHER_PADDING_2BYTE,
-    padding_offset: 14,
+    // padding: ra_fsp_ethernet::e_ether_padding_ETHER_PADDING_2BYTE,
+    // padding_offset: 14,
+    padding: ra_fsp_ethernet::e_ether_padding_ETHER_PADDING_DISABLE,
+    padding_offset: 0,
     broadcast_filter: 0,
-    p_mac_address: ptr::null_mut(), // inserted on init
+    p_mac_address: ptr::null_mut(), // configured in init
     num_tx_descriptors: ETH_N_TX_DESC as u8,
     num_rx_descriptors: ETH_N_RX_DESC as u8,
-    ether_buffer_size: IP_PACKET_SIZE,
-    irq: 0,                // see EVENT_EDMAC0_EINT position in g_interrupt_event_link_select
-    interrupt_priority: 0, // todo: before init, read the priority of that interrupt, and restore it after, asserting that it is 0 in the meantime
-    p_callback: None,
+    ether_buffer_size: ETHER_PACKET_SIZE as u32,
+    irq: 0, // note: we don't want to use it, but api requires it. So we will restore the priority
+    interrupt_priority: 0,
     p_ether_phy_instance: &raw const PHY0,
-    p_context: ptr::null_mut(),
+    p_callback: Some(c_user_ethernet_callback), // configured in init
+    p_context: ptr::null_mut(),                 // configured in init
     p_extend: (&raw const CONF_EXTEND).cast(),
     pp_ether_buffers: ptr::null_mut(),
 };
 
 static mut CTRL: MaybeUninit<ra_fsp_ethernet::ether_instance_ctrl_t> = MaybeUninit::zeroed();
-static mut PHY0_CTRL: MaybeUninit<ra_fsp_ethernet::ether_phy_instance_ctrl_t> =
-    MaybeUninit::zeroed();
-
-static PHY0_CFG: ra_fsp_ethernet::ether_phy_cfg_t = ra_fsp_ethernet::ether_phy_cfg_t {
-    channel: 0,
-    phy_lsi_address: 1,
-    phy_reset_wait_time: 0x00020000,
-    mii_bit_access_wait_time: 8,
-    phy_lsi_type: ra_fsp_ethernet::e_ether_phy_lsi_type_ETHER_PHY_LSI_TYPE_DP83620,
-    flow_control: ra_fsp_ethernet::e_ether_phy_flow_control_ETHER_PHY_FLOW_CONTROL_DISABLE,
-    mii_type: ra_fsp_ethernet::e_ether_phy_mii_type_ETHER_PHY_MII_TYPE_RMII,
-    p_context: ptr::null_mut(),
-    p_extend: ptr::null_mut(),
-};
 
 static ETHER: ra_fsp_ethernet::ether_instance_t = ra_fsp_ethernet::ether_instance_t {
     p_ctrl: (&raw mut CTRL).cast(),
@@ -178,92 +267,120 @@ static ETHER: ra_fsp_ethernet::ether_instance_t = ra_fsp_ethernet::ether_instanc
     p_api: &raw const ra_fsp_ethernet::g_ether_on_ether,
 };
 
-static PHY0: ra_fsp_ethernet::ether_phy_instance_t = ra_fsp_ethernet::ether_phy_instance_t {
-    p_ctrl: (&raw mut PHY0_CTRL).cast(),
-    p_cfg: &raw const PHY0_CFG,
-    p_api: &raw const ra_fsp_ethernet::g_ether_phy_on_ether_phy,
-};
+const ETH0: EtherInstane = EtherInstane(&raw const ETHER);
 
-fn init(_cs: CriticalSection<'_>, mac: [u8; 6]) {
-    static mut MAC: [u8; 6] = [0; 6];
+impl EtherInstane {
+    fn open(&self) -> u32 {
+        unsafe { (*(*self.0).p_api).open.unwrap()((*self.0).p_ctrl, (*self.0).p_cfg) }
+    }
+    fn is_up(&self) -> bool {
+        let status = unsafe {
+            (*(*self.0)
+                .p_ctrl
+                .cast::<ra_fsp_ethernet::ether_instance_ctrl_t>())
+            .link_establish_status
+        };
+        status == ra_fsp_ethernet::e_ether_link_establish_status_ETHER_LINK_ESTABLISH_STATUS_UP
+    }
+    fn link_process(&self) -> u32 {
+        unsafe { (*(*self.0).p_api).linkProcess.unwrap()((*self.0).p_ctrl) }
+    }
+    fn get_ctrl_open(&self) -> u32 {
+        unsafe {
+            (*(*self.0)
+                .p_ctrl
+                .cast::<ra_fsp_ethernet::ether_instance_ctrl_t>())
+            .open
+        }
+    }
+    #[allow(dead_code)]
+    fn close(&self) -> u32 {
+        unsafe { (*(*self.0).p_api).close.unwrap()((*self.0).p_ctrl) }
+    }
+    #[allow(dead_code)]
+    fn buffer_release(&self) -> u32 {
+        unsafe { (*(*self.0).p_api).bufferRelease.unwrap()((*self.0).p_ctrl) }
+    }
+    #[allow(dead_code)]
+    fn callback_set(
+        &self,
+        callback: Option<unsafe extern "C" fn(*mut ra_fsp_ethernet::st_ether_callback_args)>,
+        context: *const (),
+        memory: *mut ra_fsp_ethernet::st_ether_callback_args,
+    ) -> u32 {
+        unsafe {
+            (*(*self.0).p_api).callbackSet.unwrap()(
+                (*self.0).p_ctrl,
+                callback,
+                context.cast(),
+                memory,
+            )
+        }
+    }
+    fn tx_status_get(&self, buffer: *mut *mut u8) -> u32 {
+        unsafe { (*(*self.0).p_api).txStatusGet.unwrap()((*self.0).p_ctrl, buffer.cast()) }
+    }
+    fn rx_buffer_update(&self, buffer: *mut u8) -> u32 {
+        unsafe { (*(*self.0).p_api).rxBufferUpdate.unwrap()((*self.0).p_ctrl, buffer.cast()) }
+    }
+    fn write(&self, buffer: *const u8, len: u32) -> u32 {
+        unsafe {
+            (*(*self.0).p_api).write.unwrap()((*self.0).p_ctrl, buffer.cast_mut().cast(), len)
+        }
+    }
+    fn read(&self) -> Result<&mut [u8], u32> {
+        unsafe {
+            let mut ptr: *mut u8 = ptr::null_mut();
+            let mut len: u32 = 0;
 
-    unsafe {
-        ptr::write(&raw mut MAC, mac);
-        MAC.reverse(); // NIC has reversed bytes order
-        ptr::write(&raw mut CONF.p_mac_address, (&raw mut MAC).cast());
-
-        let res: u32 = ((*ETHER.p_api).open.unwrap())(ETHER.p_ctrl, ETHER.p_cfg);
-
-        assert_eq!(res, 0);
-
-        loop {
-            /* When the Ethernet link status read from the PHY-LSI Basic Status register is link-up,
-             * Initializes the module and make auto negotiation. */
-
-            let res: u32 = ((*ETHER.p_api).linkProcess.unwrap())(ETHER.p_ctrl);
-
-            if res == 0 {
-                break;
+            let ret = (*(*self.0).p_api).read.unwrap()(
+                (*self.0).p_ctrl,
+                ptr::from_mut(&mut ptr).cast(),
+                ptr::from_mut(&mut len).cast(),
+            );
+            if ret == 0 {
+                assert!(!ptr.is_null(), "Pointer to buffer is null");
+                Ok(core::slice::from_raw_parts_mut(ptr, len as usize))
+            } else {
+                Err(ret)
             }
         }
     }
 }
 
-#[inline(always)]
-pub fn isr_handler(device: &mut Dev) -> Option<InterruptCause> {
-    unsafe { isr_handler_inner(device) }
+fn init(_cs: CriticalSection<'_>, nvic: &mut cortex_m::peripheral::NVIC, mut mac: [u8; 6]) {
+    static mut MAC: [u8; 6] = [0; 6];
+
+    unsafe {
+        mac.reverse();
+        ptr::write(&raw mut MAC, mac);
+        ptr::write(&raw mut CONF.p_mac_address, (&raw mut MAC).cast());
+
+        let isr_num0_priority = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
+        let res: u32 = ETH0.open();
+
+        let overwritten_priority = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
+        assert_eq!(overwritten_priority, 0);
+
+        nvic.set_priority(Interrupt::IEL0, isr_num0_priority);
+        assert_eq!(
+            cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0),
+            isr_num0_priority
+        );
+
+        assert_eq!(res, 0);
+    }
 }
 
-#[inline(always)]
-unsafe fn isr_handler_inner(device: &mut Dev) -> Option<InterruptCause> {
-    let args = unsafe {
-        // For some reason, fsp is not including isr handlers in headers
-        unsafe extern "C" {
-            fn ether_eint_isr();
-        }
-
-        let mut args: MaybeUninit<ra_fsp_ethernet::st_ether_callback_args> = MaybeUninit::uninit();
-        let res: u32 = ((*ETHER.p_api).callbackSet.unwrap())(
-            ETHER.p_ctrl,
-            Some(callback),
-            ptr::null(),
-            args.as_mut_ptr().cast(),
-        );
-
-        if res != 0 {
-            return None;
-        }
-
-        ether_eint_isr();
-
-        let res: u32 = ((*ETHER.p_api).callbackSet.unwrap())(
-            ETHER.p_ctrl,
-            Some(callback),
-            ptr::null(),
-            ptr::null_mut(),
-        );
-        assert_eq!(res, 0);
-
-        args.assume_init()
-    };
-
-    // Those constants are not exported but used in r_ether.c
-
-    const ETHER_ETHERC_INTERRUPT_FACTOR_LCHNG: u32 = 1 << 2;
-    const ETHER_ETHERC_INTERRUPT_FACTOR_MPD: u32 = 1 << 1;
-    const ETHER_EDMAC_INTERRUPT_FACTOR_ALL: u32 = 0x47FF0F9F;
-    const ETHER_EDMAC_INTERRUPT_FACTOR_RFCOF: u32 = 1 << 24;
-    const ETHER_EDMAC_INTERRUPT_FACTOR_ECI: u32 = 1 << 22;
-    /* Transmit Complete. */
+pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option<InterruptCause> {
+    /* Transmit Complete. (all pending transmissions) */
     const ETHER_EDMAC_INTERRUPT_FACTOR_TC: u32 = 1 << 21;
     /* Frame Receive. */
     const ETHER_EDMAC_INTERRUPT_FACTOR_FR: u32 = 1 << 18;
-    const ETHER_EDMAC_INTERRUPT_FACTOR_RDE: u32 = 1 << 17;
-    const ETHER_EDMAC_INTERRUPT_FACTOR_RFOF: u32 = 1 << 16;
 
     let mut cause = InterruptCause {
         receive: false,
-        transmit_complete: false,
+        transmits: false,
     };
 
     match args.event {
@@ -277,72 +394,73 @@ unsafe fn isr_handler_inner(device: &mut Dev) -> Option<InterruptCause> {
             }
 
             if trasmit_mask == (args.status_eesr & trasmit_mask) {
-                cause.transmit_complete = true;
-                device.tx_free = true;
+                cause.transmits = true;
 
-                unsafe {
-                    let mut p_buffer_current: *mut u8 = ptr::null_mut();
+                device.tx_available.iter_mut().for_each(|x| *x = true);
+
+                // just an assert for debug
+                {
                     let mut p_buffer_last: *mut u8 = ptr::null_mut();
 
-                    if (*ETHER.p_api).txStatusGet.unwrap()(
-                        ETHER.p_ctrl,
-                        ptr::from_mut(&mut p_buffer_last).cast(),
-                    ) != 0
-                    {
-                        log::error!("Failed to get the last buffer transmitted.");
+                    if ETH0.tx_status_get(&mut p_buffer_last) != 0 {
+                        error!("Failed to get the last buffer transmitted.");
                     }
 
                     assert!(!p_buffer_last.is_null());
+
+                    if let Some(_idx) = device.tx.iter().position(|x| {
+                        x.0.as_ptr() <= p_buffer_last
+                            && x.0.as_ptr().wrapping_add(MTU) > p_buffer_last
+                    }) {
+                        // ok
+                    } else {
+                        // debug assert
+                        panic!(
+                            "Failed to find the last buffer transmitted, driver gave {:p}, while we have {:p}, {:p}, {:p}, {:p}",
+                            p_buffer_last,
+                            device.tx[0].0.as_ptr(),
+                            device.tx[1].0.as_ptr(),
+                            device.tx[2].0.as_ptr(),
+                            device.tx[3].0.as_ptr()
+                        );
+                    }
                 }
             }
         }
-        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_ON => todo!(),
-        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_OFF => todo!(),
-        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_WAKEON_LAN => {}
+        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_ON => {
+            for i in 0..ETH_N_RX_DESC {
+                // SAFETY: when link on, driver does not have pointers to the buffers
+                let rx = unsafe { device.rx.as_mut().get_unchecked_mut() };
+                ETH0.rx_buffer_update(rx[i].0.as_mut_ptr());
+            }
+        }
+        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_OFF => {
+            /*
+             * When the link is re-established, the Ethernet driver will reset all of the buffer descriptors.
+             */
+            device.tx_available.iter_mut().for_each(|x| *x = true);
+        }
         _ => return None,
     };
 
     Some(cause)
 }
 
-fn disable() {
-    unsafe {
-        (*ETHER.p_api).close.unwrap()(ETHER.p_ctrl);
+pub fn ethernet_isr_handler() {
+    unsafe extern "C" {
+        unsafe fn ether_eint_isr();
     }
+    unsafe { ether_eint_isr() }
 }
 
-fn is_packet_available() -> bool {
-    // unsafe { EthernetPacketAvail(ETH_BASE) != 0 }
-}
+unsafe extern "C" fn c_user_ethernet_callback(args: *mut ra_fsp_ethernet::st_ether_callback_args) {
+    let args = unsafe { *args };
 
-fn is_send_space_available(dev: &Dev) -> bool {
-    dev.tx_free
-}
-
-fn packet_get(buf: &mut [u8; MTU]) -> isize {
-    // let ptr = buf.as_mut_ptr();
-    // let len = buf.len() as i32;
-    // let len = unsafe { EthernetPacketGetNonBlocking(ETH_BASE, ptr, len) };
-    //
-    // if len == 0 {
-    //     warn!("No packet available");
-    //     return 0;
-    // }
-    //
-    // assert!(len < 0 || len as usize <= buf.len());
-    //
-    // cortex_m::asm::dmb();
-    //
-    // len as isize
-}
-
-fn send(packet: &[u8]) {
-    let ptr = packet.as_ptr().cast_mut();
-    let len = packet.len() as i32;
-
-    cortex_m::asm::dmb();
-
-    let ret = unsafe { (*ETHER.p_api).write.unwrap()(ETHER.p_ctrl, ptr, len) };
-
-    assert!(ret == 0);
+    crate::app::network_poll_callback::spawn(EthernetCallbackArgs {
+        channel: args.channel,
+        event: args.event,
+        status_ecsr: args.status_ecsr,
+        status_eesr: args.status_eesr,
+    })
+    .expect("`network_poll_callback` should have high enough priority to not let us spawn it until it competes")
 }

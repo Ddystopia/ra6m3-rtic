@@ -18,7 +18,8 @@ use crate::poll_share::{NetMutex, TokenProvider};
 use crate::log::*;
 
 /// Error returned by TcpSocket read/write functions.
-#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format, strum::Display)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, strum::Display)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     /// The connection was reset.
     ///
@@ -27,7 +28,8 @@ pub enum Error {
 }
 
 /// Error returned by [`TcpSocket::connect`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format, strum::Display)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, strum::Display)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum ConnectError {
     /// The socket is already connected or listening.
     InvalidState,
@@ -40,7 +42,8 @@ pub enum ConnectError {
 }
 
 /// Error returned by [`TcpSocket::accept`].
-#[derive(PartialEq, Eq, Clone, Copy, Debug, defmt::Format, strum::Display)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug, strum::Display)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum AcceptError {
     /// The socket is already connected or listening.
     InvalidState,
@@ -97,10 +100,11 @@ impl<M: NetMutex> SocketInner<M> {
     }
 
     fn with_mut<R>(&self, f: impl FnOnce(&mut tcp::Socket, &mut Interface) -> R) -> R {
+        crate::info!("TcpSocket::with_mut");
         self.net.lock(|net| {
             let socket = net.sockets.get_mut::<tcp::Socket>(self.handle);
             let res = f(socket, &mut net.iface);
-            crate::NET_WAKER.wake_by_ref();
+            crate::NET_WAKER.wake_by_ref(); // egress. todo: maybe separate those 2 concepts? to avoid circular dependencies
             res
         })
     }

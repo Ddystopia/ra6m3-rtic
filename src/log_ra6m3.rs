@@ -14,7 +14,15 @@ pub fn init() {
 }
 
 #[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    log::error!("Panic: {}", info);
+
+    // todo: it is not ok for prod I guess? And what if low prriority task paniced?
+    //       we probably need cs
+    for _ in 0..1_000_000usize {
+        cortex_m::asm::nop();
+    }
+
     loop {
         cortex_m::asm::bkpt();
     }

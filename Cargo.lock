@@ -1149,6 +1149,10 @@ name = "once_cell"
 version = "1.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
+dependencies = [
+ "critical-section",
+ "portable-atomic 1.11.0",
+]
 
 [[package]]
 name = "opaque-debug"
@@ -1327,6 +1331,7 @@ dependencies = [
  "replace_with",
  "rtic",
  "rtic-monotonics",
+ "rtt-target",
  "smoltcp",
  "static_cell",
  "strum",
@@ -1497,6 +1502,18 @@ dependencies = [
  "fugit",
  "futures-util",
  "rtic-common",
+]
+
+[[package]]
+name = "rtt-target"
+version = "0.6.1"
+source = "git+https://github.com/probe-rs/rtt-target.git#117d9519a5d3b1f4bc024bc05f9e3c5dec0a57f5"
+dependencies = [
+ "critical-section",
+ "log",
+ "once_cell",
+ "portable-atomic 1.11.0",
+ "ufmt-write",
 ]
 
 [[package]]
@@ -1688,6 +1705,7 @@ dependencies = [
  "cfg-if",
  "defmt",
  "heapless 0.8.0",
+ "log",
  "managed",
 ]
 
@@ -1802,6 +1820,12 @@ name = "typewit_proc_macros"
 version = "1.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e36a83ea2b3c704935a01b4642946aadd445cea40b10935e3f8bd8052b8193d6"
+
+[[package]]
+name = "ufmt-write"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e87a2ed6b42ec5e28cc3b94c09982969e9227600b2e3dcbc1db927a84c06bd69"
 
 [[package]]
 name = "unicode-ident"

@@ -1,9 +1,9 @@
-use rtic_monotonics::{Monotonic, fugit::Duration};
+use rtic_monotonics::Monotonic;
 
 pub struct Timer;
 
 impl picoserve::Timer for Timer {
-    type Duration = Duration<u32, 1, 1000>;
+    type Duration = crate::Duration;
 
     type TimeoutError = ();
 

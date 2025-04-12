@@ -10,7 +10,7 @@ tasks:
 
   build-debug:
     cmds:
-      - cargo build
+      - cargo build --no-default-features -Fqemu,defmt
 
   build-release:
     cmds:

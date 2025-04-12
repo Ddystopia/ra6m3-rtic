@@ -9,14 +9,11 @@ use core::{
 use embedded_nal::{TcpClientStack, TcpError, nb};
 #[cfg(feature = "tls")]
 use embedded_tls::{TlsContext, TlsError, UnsecureProvider};
-use rtic_monotonics::{
-    Monotonic,
-    fugit::{ExtU32, Instant},
-};
+use rtic_monotonics::{Monotonic, fugit::ExtU32};
 use smoltcp::{iface::SocketHandle, socket::tcp};
 
 use crate::{
-    Mono,
+    Instant, Mono,
     log::*,
     poll_share::TokenProvider,
     socket::{self, TcpSocket},
@@ -62,14 +59,16 @@ pub struct EmbeddedNalAdapter {
     waiting_for_message: &'static Cell<bool>,
 }
 
-#[derive(Debug, defmt::Format, strum::Display)]
+#[derive(Debug, strum::Display)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     TcpError(socket::Error),
     #[cfg(feature = "tls")]
     TlsError(TlsError),
 }
 
-#[derive(Debug, defmt::Format, strum::Display)]
+#[derive(Debug, strum::Display)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum NetError {
     PipeClosed,
     TcpConnectError(socket::ConnectError),
@@ -79,7 +78,7 @@ pub enum NetError {
     RecvError(Error),
 }
 
-#[derive(Debug, PartialEq, defmt::Format)]
+#[derive(Debug, PartialEq)]
 enum AdapterMessageIn {
     Connect(SocketAddr),
     Read(&'static mut [u8]),
@@ -178,7 +177,7 @@ async fn handle_tls_session(
                 let res = match tls_socket.close().await {
                     Ok(()) => Ok(()),
                     Err(_err) => {
-                        error!("TLS close error");
+                        crate::log::error!("TLS close error");
                         let mut tcp_socket = TcpSocket::new(net, handle);
                         tcp_socket.abort();
                         Err(NetError::PipeClosed)
@@ -206,7 +205,7 @@ async fn adapter_task(
     tcp_socket.set_timeout(Some(smoltcp::time::Duration::from_secs(3600)));
     tcp_socket.set_keep_alive(Some(smoltcp::time::Duration::from_secs(3600 / 3)));
     let mut port_shift = core::num::Wrapping::<u8>(0);
-    let mut last_connection_attempt: Option<Instant<u32, 1, 1000>> = None;
+    let mut last_connection_attempt: Option<Instant> = None;
 
     loop {
         match dequeue(rx, waiting_for_message).await {

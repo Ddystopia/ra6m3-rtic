@@ -12,8 +12,8 @@ use crate::log::*;
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[allow(dead_code)]
 pub struct InterruptCause {
-    receive: bool,
-    transmit_complete: bool,
+    pub receive: bool,
+    pub transmit_complete: bool,
 }
 
 const MTU: usize = 1500;
