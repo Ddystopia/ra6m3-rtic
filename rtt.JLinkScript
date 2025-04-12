@@ -1,0 +1,3 @@
+void SetupTarget(void) {
+  JLINK_ExecCommand("SetRTTAddr 0x1ffe0000");
+}

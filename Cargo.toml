@@ -22,17 +22,19 @@ minimq = "0.10.0"
 embedded-nal = "0.9.0"
 embedded-time = "0.12.1"
 futures-lite = { version = "2.6.0", default-features = false, features = [] }
-heapless = { version = "0.8.0", default-features = false, features = ["defmt-03"] }
+heapless = { version = "0.8.0", default-features = false, features = [] }
 static_cell = "2.1.0"
-picoserve = { version = "0.15.0", features = ["defmt"] }
+picoserve = { version = "0.15.0", features = [] }
 replace_with = { version = "0.1.7", default-features = false, features = ["nightly", "panic_abort"] }
-embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", default-features = false, features = ["defmt"], optional = true }
+embedded-tls = { git = "https://github.com/drogue-iot/embedded-tls", default-features = false, features = [], optional = true }
 embedded-io-async = "0.6.1"
 futures-util = { version = "0.3.31", default-features = false }
 diatomic-waker = { version = "0.2.3", default-features = false }
 rand_chacha = { version = "0.3.1", default-features = false }
 extend_mut = { version = "0.4.2", default-features = false }
 strum = { version = "0.27.1", features = ["derive"], default-features = false }
+# rtt-target = { version = "0.6.1", features = ["log"], optional = true }
+rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", features = ["log"], optional = true }
 
 [profile.release]
 opt-level = 's'
