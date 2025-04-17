@@ -39,7 +39,7 @@ rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", features = ["
 opt-level = 's'
 
 [profile.dev]
-opt-level = 1
+opt-level = 0
 
 [features]
 # default = ["qemu"]

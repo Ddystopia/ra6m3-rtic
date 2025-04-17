@@ -15,7 +15,7 @@
 // #define BSP_CFG_BOOT_IMAGE (1)
 
 #define BSP_CFG_MCU_VCC_MV       3300
-#define BSP_CFG_STACK_MAIN_BYTES 16384
+#define BSP_CFG_STACK_MAIN_BYTES (1024 * 128)
 #define BSP_CFG_HEAP_BYTES       (0)
 
 #ifdef NDEBUG
