@@ -205,17 +205,13 @@ async fn poll_network(mut ctx: app::poll_network::Context<'_>) {
     let net = &mut ctx.shared.net;
     let dev = &mut ctx.shared.device;
 
+    if !dev.lock(|dev| dev.is_up()) {
+        return;
+    }
+
     (&mut *net, &mut *dev).lock(|net, dev| net.iface.poll(smol_now(), dev, &mut net.sockets));
 
-    let mut poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
-
-    // fixme: why smoltcp returns poll_at = 0 ?
-    // fixme: mqtt not reconnects if rumqttd dies
-    if let Some(poll_at_v) = poll_at {
-        if poll_at_v < smol_now() {
-            poll_at = None;
-        }
-    }
+    let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
 
     ctx.shared
         .next_net_poll
@@ -360,13 +356,17 @@ mod ra6m3_app {
 
         #[shared]
         pub struct Shared {
+            #[unsafe(link_section = ".noinit")]
             pub net: Net,
+            #[unsafe(link_section = ".noinit")]
             pub device: net_device::Dev,
+            #[unsafe(link_section = ".noinit")]
             pub next_net_poll: Option<smoltcp::time::Instant>,
         }
 
         #[local]
         pub struct Local {
+            #[unsafe(link_section = ".noinit")]
             pub net_poll_schedule_tx: WakeSourceRef<'static>,
         }
 
@@ -405,7 +405,7 @@ mod ra6m3_app {
                 .device
                 .lock(|d| net_device::ethernet_callback(d, args));
 
-            if cause.is_some_and(|cause| cause.receive || cause.transmits) {
+            if cause.is_some_and(|cause| cause.receive || cause.transmits || cause.went_up) {
                 NET_WAKER.wake_by_ref()
             }
         }

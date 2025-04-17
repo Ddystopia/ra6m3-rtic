@@ -100,7 +100,6 @@ impl<M: NetMutex> SocketInner<M> {
     }
 
     fn with_mut<R>(&self, f: impl FnOnce(&mut tcp::Socket, &mut Interface) -> R) -> R {
-        crate::info!("TcpSocket::with_mut");
         self.net.lock(|net| {
             let socket = net.sockets.get_mut::<tcp::Socket>(self.handle);
             let res = f(socket, &mut net.iface);

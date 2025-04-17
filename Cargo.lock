@@ -1332,6 +1332,7 @@ dependencies = [
  "rtic",
  "rtic-monotonics",
  "rtt-target",
+ "sha2",
  "smoltcp",
  "static_cell",
  "strum",
@@ -1468,7 +1469,6 @@ checksum = "d9369355b04d06a3780ec0f51ea2d225624db777acbc60abd8ca4832da5c1a42"
 [[package]]
 name = "rtic-macros"
 version = "2.1.2"
-source = "git+https://github.com/rtic-rs/rtic#cb7d053b788235eeda7cd76a2a0864d384fcd580"
 dependencies = [
  "indexmap",
  "proc-macro-error2",

@@ -40,6 +40,8 @@ pub struct Dev {
 }
 
 pub struct InterruptCause {
+    pub went_up: bool,
+    pub went_down: bool,
     pub receive: bool,
     pub transmits: bool,
 }
@@ -89,6 +91,10 @@ impl Dev {
         }
     }
 
+    pub fn is_up(&mut self) -> bool {
+        ETH0.is_up()
+    }
+
     fn send_packet_idx(&self) -> Option<usize> {
         self.tx_available.iter().position(|&x| x)
     }
@@ -103,6 +109,7 @@ impl Device for Dev {
 
     fn receive(&mut self, _: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
         if !ETH0.is_up() {
+            log::warn!("Ethernet is not up");
             return None;
         }
 
@@ -381,6 +388,8 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
     let mut cause = InterruptCause {
         receive: false,
         transmits: false,
+        went_up: false,
+        went_down: false,
     };
 
     match args.event {
@@ -398,7 +407,7 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
 
                 device.tx_available.iter_mut().for_each(|x| *x = true);
 
-                // just an assert for debug
+                #[cfg(debug_assertions)]
                 {
                     let mut p_buffer_last: *mut u8 = ptr::null_mut();
 
@@ -414,7 +423,6 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
                     }) {
                         // ok
                     } else {
-                        // debug assert
                         panic!(
                             "Failed to find the last buffer transmitted, driver gave {:p}, while we have {:p}, {:p}, {:p}, {:p}",
                             p_buffer_last,
@@ -428,6 +436,7 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
             }
         }
         ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_ON => {
+            cause.went_up = true;
             for i in 0..ETH_N_RX_DESC {
                 // SAFETY: when link on, driver does not have pointers to the buffers
                 let rx = unsafe { device.rx.as_mut().get_unchecked_mut() };
@@ -435,6 +444,7 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
             }
         }
         ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_OFF => {
+            cause.went_down = true;
             /*
              * When the link is re-established, the Ethernet driver will reset all of the buffer descriptors.
              */

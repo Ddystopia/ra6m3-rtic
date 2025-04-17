@@ -41,6 +41,7 @@ pub const IP_V6_NETMASK: u8 = split_ip(env!("IP_V6")).1;
 pub const IP_V6_GATEWAY: wire::Ipv6Address =
     parse_ipv6!(env!("IP_V6_GATEWAY"), wire::Ipv6Address::new);
 
+pub const MQTT_CLIENT_ID: &str = env!("MQTT_CLIENT_ID");
 pub const MQTT_BROKER_IP: Ipv4Addr = parse_ipv4!(env!("MQTT_BROKER_IP"), Ipv4Addr::new);
 pub const MQTT_BROKER_PORT_TLS: u16 =
     parse_u16(env!("MQTT_BROKER_PORT_TLS"), 10, "Invalid MQTT port");

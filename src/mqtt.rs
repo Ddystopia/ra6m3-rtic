@@ -1,7 +1,7 @@
 use core::task::{Poll, Waker};
 
 use crate::{
-    conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS},
+    conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS, MQTT_CLIENT_ID},
     log::*,
     poll_share::{self, TokenProvider},
     socket::{self},
@@ -234,6 +234,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     let keepalive_interval = 10.minutes();
     let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
     let conf = conf.keepalive_interval(keepalive_interval.to_secs() as u16);
+    let conf = conf.client_id(MQTT_CLIENT_ID).expect("Invalid client id");
     let callback = on_message();
 
     #[cfg(feature = "tls")]
