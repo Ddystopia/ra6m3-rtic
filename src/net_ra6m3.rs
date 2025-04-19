@@ -1,29 +1,35 @@
 use crate::log::*;
-use core::marker::PhantomPinned;
-use core::mem::MaybeUninit;
-use core::ops::{Deref, DerefMut};
-use core::pin::Pin;
-use core::ptr;
 
-// todo: move map from init.c here
-//       [VECTOR_NUMBER_EDMAC0_EINT]             = ELC_EVENT_EDMAC0_EINT,
+use core::{
+    marker::PhantomPinned,
+    mem::MaybeUninit,
+    ops::{Deref, DerefMut},
+    pin::Pin,
+    ptr,
+};
 
 use bare_metal::CriticalSection;
-use ra_fsp_sys::Interrupt;
-use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken};
-use smoltcp::time::Instant;
+use ra_fsp_sys::{
+    Interrupt,
+    ether_phy::{e_ether_phy_lsi_type, e_ether_phy_mii_type},
+};
+use smoltcp::{
+    phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken},
+    time::Instant,
+};
 
-const MTU: usize = 1500;
+const VAR_NAME: usize = 1500;
+const MTU: usize = VAR_NAME;
 
 pub const ETH_N_TX_DESC: usize = 4;
 pub const ETH_N_RX_DESC: usize = 4;
 
-struct EtherInstane(*const ra_fsp_ethernet::ether_instance_t);
+struct EtherInstane(*const ra_fsp_sys::ether_instance_t);
 
 #[derive(Debug, Clone, Copy)]
 pub struct EthernetCallbackArgs {
     pub channel: u32,
-    pub event: ra_fsp_ethernet::ether_event_t,
+    pub event: ra_fsp_sys::ether_event_t,
     pub status_ecsr: u32,
     pub status_eesr: u32,
 }
@@ -119,7 +125,7 @@ impl Device for Dev {
                 EthernetRxToken(buf),
                 EthernetTxToken(&mut self.tx[tx].0, &mut self.tx_available[tx]),
             )),
-            Err(ra_fsp_ethernet::e_fsp_err_FSP_ERR_ETHER_ERROR_NO_DATA) => None,
+            Err(ra_fsp_sys::FSP_ERR_ETHER_ERROR_NO_DATA) => None,
             Err(err) => {
                 error!("Ethernet read error: {}", err);
                 None
@@ -180,7 +186,7 @@ impl TxToken for EthernetTxToken<'_> {
         let packet: &[u8] = &self.0[..length.max(60)];
         let ret = ETH0.write(packet.as_ptr(), packet.len() as u32);
 
-        if ret == ra_fsp_ethernet::e_fsp_err_FSP_ERR_ETHER_ERROR_LINK {
+        if ret == ra_fsp_sys::FSP_ERR_ETHER_ERROR_LINK {
             return result;
         }
 
@@ -194,35 +200,25 @@ impl TxToken for EthernetTxToken<'_> {
 
 #[repr(C, align(16))]
 struct EtherInstanceDescriptor<const N: usize> {
-    descriptors: MaybeUninit<[ra_fsp_ethernet::ether_instance_descriptor_t; N]>,
+    descriptors: MaybeUninit<[ra_fsp_sys::ether_instance_descriptor_t; N]>,
 }
-
-static mut PHY0_CTRL: MaybeUninit<ra_fsp_ethernet::ether_phy_instance_ctrl_t> =
-    MaybeUninit::zeroed();
 
 // todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
 //       that way, we don't need to have a large buffer for smaller stuff, right? Not sure
 //       now it interacts with the limit (8) of buffers.
 
-static PHY0_CFG: ra_fsp_ethernet::ether_phy_cfg_t = ra_fsp_ethernet::ether_phy_cfg_t {
+static PHY0_CFG: ra_fsp_sys::ether_phy::EtherPhyConfig = ra_fsp_sys::ether_phy::EtherPhyConfig {
     channel: 0,
     phy_lsi_address: 0,
     phy_reset_wait_time: 0x00020000,
     mii_bit_access_wait_time: 8,
-    // idk why it doesn work with KSZ8091RNB, manual says it has it
-    // phy_lsi_type: ra_fsp_ethernet::e_ether_phy_lsi_type_ETHER_PHY_LSI_TYPE_KSZ8091RNB,
-    phy_lsi_type: ra_fsp_ethernet::e_ether_phy_lsi_type_ETHER_PHY_LSI_TYPE_DEFAULT,
-    flow_control: ra_fsp_ethernet::e_ether_phy_flow_control_ETHER_PHY_FLOW_CONTROL_DISABLE,
-    mii_type: ra_fsp_ethernet::e_ether_phy_mii_type_ETHER_PHY_MII_TYPE_RMII,
-    p_context: ptr::null_mut(),
-    p_extend: ptr::null_mut(),
+    phy_lsi_type: e_ether_phy_lsi_type::ETHER_PHY_LSI_TYPE_DEFAULT,
+    flow_control: false,
+    mii_type: e_ether_phy_mii_type::ETHER_PHY_MII_TYPE_RMII,
 };
 
-static PHY0: ra_fsp_ethernet::ether_phy_instance_t = ra_fsp_ethernet::ether_phy_instance_t {
-    p_ctrl: (&raw mut PHY0_CTRL).cast(),
-    p_cfg: &raw const PHY0_CFG,
-    p_api: &raw const ra_fsp_ethernet::g_ether_phy_on_ether_phy,
-};
+static PHY0: ra_fsp_sys::ether_phy_instance_t =
+    ra_fsp_sys::const_c_dyn!(ra_fsp_sys::ether_phy, &PHY0_CFG);
 
 // #if (BSP_FEATURE_TZ_HAS_TRUSTZONE == 1) && (BSP_TZ_SECURE_BUILD != 1) && (BSP_TZ_NONSECURE_BUILD != 1)
 //    place in ".ns_buffer.eth" section
@@ -237,20 +233,18 @@ static mut MAC0_RX_DESCRIPTORS: EtherInstanceDescriptor<ETH_N_RX_DESC> = EtherIn
 
 const ETHER_PACKET_SIZE: usize = 1568;
 
-static CONF_EXTEND: ra_fsp_ethernet::ether_extended_cfg_t = ra_fsp_ethernet::ether_extended_cfg_t {
+static CONF_EXTEND: ra_fsp_sys::ether_extended_cfg_t = ra_fsp_sys::ether_extended_cfg_t {
     p_rx_descriptors: (&raw mut MAC0_RX_DESCRIPTORS).cast(),
     p_tx_descriptors: (&raw mut MAC0_TX_DESCRIPTORS).cast(),
 };
 
-static mut CONF: ra_fsp_ethernet::ether_cfg_t = ra_fsp_ethernet::ether_cfg_t {
+static mut CONF: ra_fsp_sys::ether_cfg_t = ra_fsp_sys::ether_cfg_t {
     channel: 0,
-    zerocopy: ra_fsp_ethernet::e_ether_zerocopy_ETHER_ZEROCOPY_ENABLE,
-    multicast: ra_fsp_ethernet::e_ether_multicast_ETHER_MULTICAST_ENABLE,
-    promiscuous: ra_fsp_ethernet::e_ether_promiscuous_ETHER_PROMISCUOUS_ENABLE,
-    flow_control: ra_fsp_ethernet::e_ether_flow_control_ETHER_FLOW_CONTROL_ENABLE,
-    // padding: ra_fsp_ethernet::e_ether_padding_ETHER_PADDING_2BYTE,
-    // padding_offset: 14,
-    padding: ra_fsp_ethernet::e_ether_padding_ETHER_PADDING_DISABLE,
+    zerocopy: ra_fsp_sys::ETHER_ZEROCOPY_ENABLE,
+    multicast: ra_fsp_sys::ETHER_MULTICAST_ENABLE,
+    promiscuous: ra_fsp_sys::ETHER_PROMISCUOUS_ENABLE,
+    flow_control: ra_fsp_sys::ETHER_FLOW_CONTROL_ENABLE,
+    padding: ra_fsp_sys::ETHER_PADDING_DISABLE,
     padding_offset: 0,
     broadcast_filter: 0,
     p_mac_address: ptr::null_mut(), // configured in init
@@ -266,12 +260,12 @@ static mut CONF: ra_fsp_ethernet::ether_cfg_t = ra_fsp_ethernet::ether_cfg_t {
     pp_ether_buffers: ptr::null_mut(),
 };
 
-static mut CTRL: MaybeUninit<ra_fsp_ethernet::ether_instance_ctrl_t> = MaybeUninit::zeroed();
+static mut CTRL: MaybeUninit<ra_fsp_sys::ether_instance_ctrl_t> = MaybeUninit::zeroed();
 
-static ETHER: ra_fsp_ethernet::ether_instance_t = ra_fsp_ethernet::ether_instance_t {
+static ETHER: ra_fsp_sys::ether_instance_t = ra_fsp_sys::ether_instance_t {
     p_ctrl: (&raw mut CTRL).cast(),
     p_cfg: &raw const CONF,
-    p_api: &raw const ra_fsp_ethernet::g_ether_on_ether,
+    p_api: &raw const ra_fsp_sys::g_ether_on_ether,
 };
 
 const ETH0: EtherInstane = EtherInstane(&raw const ETHER);
@@ -282,23 +276,15 @@ impl EtherInstane {
     }
     fn is_up(&self) -> bool {
         let status = unsafe {
-            (*(*self.0)
-                .p_ctrl
-                .cast::<ra_fsp_ethernet::ether_instance_ctrl_t>())
-            .link_establish_status
+            (*(*self.0).p_ctrl.cast::<ra_fsp_sys::ether_instance_ctrl_t>()).link_establish_status
         };
-        status == ra_fsp_ethernet::e_ether_link_establish_status_ETHER_LINK_ESTABLISH_STATUS_UP
+        status == ra_fsp_sys::ETHER_LINK_ESTABLISH_STATUS_UP
     }
     fn link_process(&self) -> u32 {
         unsafe { (*(*self.0).p_api).linkProcess.unwrap()((*self.0).p_ctrl) }
     }
     fn get_ctrl_open(&self) -> u32 {
-        unsafe {
-            (*(*self.0)
-                .p_ctrl
-                .cast::<ra_fsp_ethernet::ether_instance_ctrl_t>())
-            .open
-        }
+        unsafe { (*(*self.0).p_ctrl.cast::<ra_fsp_sys::ether_instance_ctrl_t>()).open }
     }
     #[allow(dead_code)]
     fn close(&self) -> u32 {
@@ -311,9 +297,9 @@ impl EtherInstane {
     #[allow(dead_code)]
     fn callback_set(
         &self,
-        callback: Option<unsafe extern "C" fn(*mut ra_fsp_ethernet::st_ether_callback_args)>,
+        callback: Option<unsafe extern "C" fn(*mut ra_fsp_sys::st_ether_callback_args)>,
         context: *const (),
-        memory: *mut ra_fsp_ethernet::st_ether_callback_args,
+        memory: *mut ra_fsp_sys::st_ether_callback_args,
     ) -> u32 {
         unsafe {
             (*(*self.0).p_api).callbackSet.unwrap()(
@@ -324,6 +310,7 @@ impl EtherInstane {
             )
         }
     }
+    #[cfg(debug_assertions)]
     fn tx_status_get(&self, buffer: *mut *mut u8) -> u32 {
         unsafe { (*(*self.0).p_api).txStatusGet.unwrap()((*self.0).p_ctrl, buffer.cast()) }
     }
@@ -365,6 +352,8 @@ fn init(_cs: CriticalSection<'_>, nvic: &mut cortex_m::peripheral::NVIC, mut mac
 
         let isr_num0_priority = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
         let res: u32 = ETH0.open();
+        info!("Ethernet open() -> {}", res);
+        assert_eq!(res, 0);
 
         let overwritten_priority = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
         assert_eq!(overwritten_priority, 0);
@@ -374,8 +363,6 @@ fn init(_cs: CriticalSection<'_>, nvic: &mut cortex_m::peripheral::NVIC, mut mac
             cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0),
             isr_num0_priority
         );
-
-        assert_eq!(res, 0);
     }
 }
 
@@ -393,7 +380,7 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
     };
 
     match args.event {
-        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_INTERRUPT => {
+        ra_fsp_sys::ETHER_EVENT_INTERRUPT => {
             let receive_mask = ETHER_EDMAC_INTERRUPT_FACTOR_FR;
             let trasmit_mask = ETHER_EDMAC_INTERRUPT_FACTOR_TC;
 
@@ -435,7 +422,7 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
                 }
             }
         }
-        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_ON => {
+        ra_fsp_sys::ETHER_EVENT_LINK_ON => {
             cause.went_up = true;
             for i in 0..ETH_N_RX_DESC {
                 // SAFETY: when link on, driver does not have pointers to the buffers
@@ -443,7 +430,7 @@ pub fn ethernet_callback(device: &mut Dev, args: EthernetCallbackArgs) -> Option
                 ETH0.rx_buffer_update(rx[i].0.as_mut_ptr());
             }
         }
-        ra_fsp_ethernet::ether_event_t_ETHER_EVENT_LINK_OFF => {
+        ra_fsp_sys::ETHER_EVENT_LINK_OFF => {
             cause.went_down = true;
             /*
              * When the link is re-established, the Ethernet driver will reset all of the buffer descriptors.
@@ -463,7 +450,7 @@ pub fn ethernet_isr_handler() {
     unsafe { ether_eint_isr() }
 }
 
-unsafe extern "C" fn c_user_ethernet_callback(args: *mut ra_fsp_ethernet::st_ether_callback_args) {
+unsafe extern "C" fn c_user_ethernet_callback(args: *mut ra_fsp_sys::st_ether_callback_args) {
     let args = unsafe { *args };
 
     crate::app::network_poll_callback::spawn(EthernetCallbackArgs {
