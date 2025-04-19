@@ -14,8 +14,6 @@ mod logger_setup;
 #[path = "net_semihosting.rs"]
 mod net_device;
 
-// todo: .uninit section ends up in the binary for some reason
-// todo: goes to NMI if without opt
 // todo: if link is down for long, needs reset for ping to work
 
 #[cfg(all(feature = "ra6m3", feature = "log"))]
@@ -25,8 +23,7 @@ mod logger_setup;
 #[path = "net_ra6m3.rs"]
 mod net_device;
 
-type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
-type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
+mod io_ports;
 
 mod log {
     #![allow(unused_imports)]
@@ -46,6 +43,8 @@ mod socket;
 mod socket_storage;
 mod util;
 
+use ra_fsp_sys::ioport::{IoPort, IoPortInstance};
+
 use bare_metal::CriticalSection;
 use conf::{
     CLOCK_HZ, IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC,
@@ -64,6 +63,13 @@ use smoltcp::{
 
 use socket_storage::{SocketStorage, TcpSocketStorage};
 
+type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
+type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
+
+ra_fsp_sys::event_link_select! {
+    ra_fsp_sys::ELC_EVENT_EDMAC0_EINT => ra_fsp_sys::Interrupt::IEL0,
+}
+
 // fixme: u32 overflow, as it is in milliseconds
 systick_monotonic!(Mono, CLOCK_HZ);
 
@@ -77,6 +83,64 @@ pub struct Net {
 fn smol_now() -> smoltcp::time::Instant {
     let ticks = Mono::now().ticks() as i64 * 1_000_000 / CLOCK_HZ as i64;
     smoltcp::time::Instant::from_micros(ticks)
+}
+
+fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
+    use core::pin::Pin;
+
+    ctx.core.SCB.set_sleepdeep();
+
+    let mut io_port = Pin::static_mut(ctx.local.io_port); // we may put it in `Shared`
+
+    io_port.as_mut().open(&io_ports::BSP_PIN_CFG).expect("Failed to open ioports");
+
+    logger_setup::init();
+
+    info!("Init start");
+    info!("Size of tasks: {}b", ctx.executors_size);
+
+    Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
+
+    #[cfg(feature = "ra6m3")]
+    let (mut net, device, sockets) = init_network(
+        ctx.device.EDMAC0,
+        &mut ctx.core.NVIC,
+        ctx.cs,
+        ctx.local.sockets,
+        ctx.local.tx_buffers,
+        ctx.local.rx_buffers,
+    );
+    #[cfg(feature = "qemu")]
+    let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
+    let [mqtt_socket_handle, http_socket_handle] = sockets;
+
+    let sink = ctx.local.net_waker.sink_ref();
+    let net_poll_schedule_tx = sink.source_ref();
+
+    let next_net_poll = net.iface.poll_at(smol_now(), &mut net.sockets);
+
+    app::network_poll_scheduler::spawn(sink).ok();
+
+    app::waiter::spawn().ok();
+    app::mqtt_task::spawn(mqtt_socket_handle).ok();
+    app::http_task::spawn(http_socket_handle).ok();
+    #[cfg(feature = "ra6m3")]
+    app::network_link_poll::spawn().ok();
+    #[cfg(feature = "ra6m3")]
+    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).ok();
+
+    info!("Init done");
+
+    (
+        app::Shared {
+            net,
+            device,
+            next_net_poll,
+        },
+        app::Local {
+            net_poll_schedule_tx,
+        },
+    )
 }
 
 fn init_network(
@@ -129,58 +193,6 @@ fn init_network(
         .unwrap();
 
     (Net { iface, sockets }, device, [mqtt, http])
-}
-
-fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
-    ctx.core.SCB.set_sleepdeep();
-
-    logger_setup::init();
-
-    info!("Init start");
-    info!("Size of tasks: {}b", ctx.executors_size);
-
-    Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
-
-    #[cfg(feature = "ra6m3")]
-    let (mut net, device, sockets) = init_network(
-        ctx.device.EDMAC0,
-        &mut ctx.core.NVIC,
-        ctx.cs,
-        ctx.local.sockets,
-        ctx.local.tx_buffers,
-        ctx.local.rx_buffers,
-    );
-    #[cfg(feature = "qemu")]
-    let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
-    let [mqtt_socket_handle, http_socket_handle] = sockets;
-
-    let sink = ctx.local.net_waker.sink_ref();
-    let net_poll_schedule_tx = sink.source_ref();
-
-    let next_net_poll = net.iface.poll_at(smol_now(), &mut net.sockets);
-
-    app::network_poll_scheduler::spawn(sink).ok();
-
-    app::waiter::spawn().ok();
-    app::mqtt_task::spawn(mqtt_socket_handle).ok();
-    app::http_task::spawn(http_socket_handle).ok();
-    #[cfg(feature = "ra6m3")]
-    app::network_link_poll::spawn().ok();
-    #[cfg(feature = "ra6m3")]
-    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).ok();
-
-    info!("Init done");
-
-    (
-        app::Shared {
-            net,
-            device,
-            next_net_poll,
-        },
-        app::Local {
-            net_poll_schedule_tx,
-        },
-    )
 }
 
 async fn waiter(_: app::waiter::Context<'_>) -> ! {
@@ -250,7 +262,11 @@ async fn network_poll_scheduler(
                 delay = None
             }
             Event::NewTimeout(at) => {
-                crate::info!("New Delay: {} micros (now is {} ticks)", at.total_micros(), Mono::now().ticks());
+                crate::info!(
+                    "New Delay: {} micros (now is {} ticks)",
+                    at.total_micros(),
+                    Mono::now().ticks()
+                );
                 let total_micros = at.total_micros();
                 let total_millis_round_up = ((total_micros + 999) / 1000) as u32;
                 let next = Instant::from_ticks(total_millis_round_up);
@@ -374,7 +390,8 @@ mod ra6m3_app {
             sockets: SocketStorage = SocketStorage::new(),
             net_waker: DiatomicWaker = DiatomicWaker::new()
             rx_buffers: Buffers<ETH_N_RX_DESC> = Buffers::new(),
-            tx_buffers: Buffers<ETH_N_TX_DESC> = Buffers::new()
+            tx_buffers: Buffers<ETH_N_TX_DESC> = Buffers::new(),
+            io_port: IoPortInstance = IoPortInstance::new(),
         ])]
         fn init(ctx: init::Context) -> (Shared, Local) {
             super::init(ctx)
