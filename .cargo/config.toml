@@ -61,7 +61,9 @@ AR = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-
 FSP_CFG = "/home/ddystopia/code/ra6m3-rtic/fsp_cfg/"
 BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf"
 
+# can't have higher optimization level because ethernet driver stops working
 CFLAGS = """\
+  -O1 \
   -isysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf \
   -Wall -mlittle-endian -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mno-unaligned-access --std=gnu11 \
   -ffunction-sections -fdata-sections -Woverride-init -fno-short-enums"""

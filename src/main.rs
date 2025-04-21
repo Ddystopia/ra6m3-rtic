@@ -52,7 +52,6 @@ use conf::{
 };
 use diatomic_waker::{DiatomicWaker, WakeSinkRef, WakeSourceRef};
 #[cfg(feature = "ra6m3")]
-use net_device::{Buffers, ETH_N_RX_DESC, ETH_N_TX_DESC};
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
@@ -92,7 +91,10 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     let mut io_port = Pin::static_mut(ctx.local.io_port); // we may put it in `Shared`
 
-    io_port.as_mut().open(&io_ports::BSP_PIN_CFG).expect("Failed to open ioports");
+    io_port
+        .as_mut()
+        .open(&io_ports::BSP_PIN_CFG)
+        .expect("Failed to open ioports");
 
     logger_setup::init();
 
@@ -107,8 +109,6 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
         &mut ctx.core.NVIC,
         ctx.cs,
         ctx.local.sockets,
-        ctx.local.tx_buffers,
-        ctx.local.rx_buffers,
     );
     #[cfg(feature = "qemu")]
     let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
@@ -145,14 +145,12 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
 fn init_network(
     #[cfg(feature = "ra6m3")] etherc0: ra_fsp_sys::EDMAC0,
-    #[cfg(feature = "ra6m3")] nvic: &mut cortex_m::peripheral::NVIC,
+    #[cfg(feature = "ra6m3")] _nvic: &mut cortex_m::peripheral::NVIC,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
-    #[cfg(feature = "ra6m3")] tx_buffers: &'static mut Buffers<ETH_N_TX_DESC>,
-    #[cfg(feature = "ra6m3")] rx_buffers: &'static mut Buffers<ETH_N_RX_DESC>,
 ) -> (Net, net_device::Dev, [SocketHandle; 2]) {
     #[cfg(feature = "ra6m3")]
-    let mut device = net_device::Dev::new(cs, nvic, tx_buffers, rx_buffers, etherc0);
+    let mut device = net_device::Dev::new(cs, etherc0);
     #[cfg(not(feature = "ra6m3"))]
     let mut device = net_device::Dev::new(cs);
     let address = smoltcp::wire::EthernetAddress(MAC);
@@ -368,6 +366,8 @@ mod ra6m3_app {
       peripherals = true
     )]
     mod app {
+        use ra_fsp_sys::ether::InterruptCause;
+
         use super::*;
 
         #[shared]
@@ -389,8 +389,6 @@ mod ra6m3_app {
         #[init(local = [
             sockets: SocketStorage = SocketStorage::new(),
             net_waker: DiatomicWaker = DiatomicWaker::new()
-            rx_buffers: Buffers<ETH_N_RX_DESC> = Buffers::new(),
-            tx_buffers: Buffers<ETH_N_TX_DESC> = Buffers::new(),
             io_port: IoPortInstance = IoPortInstance::new(),
         ])]
         fn init(ctx: init::Context) -> (Shared, Local) {
@@ -412,25 +410,17 @@ mod ra6m3_app {
             http::http(ctx, socket).await
         }
 
-        #[task(priority = 3, shared = [device])]
-        async fn network_poll_callback(
-            mut ctx: network_poll_callback::Context,
-            args: net_device::EthernetCallbackArgs,
-        ) {
-            let cause = ctx
-                .shared
-                .device
-                .lock(|d| net_device::ethernet_callback(d, args));
-
-            if cause.is_some_and(|cause| cause.receive || cause.transmits || cause.went_up) {
-                NET_WAKER.wake_by_ref()
-            }
-        }
-
         // todo: is there a reason to give this task higher priority?
         #[task(binds = IEL0, priority = 2)]
         fn ethernet_isr(_ctx: ethernet_isr::Context) {
             net_device::ethernet_isr_handler();
+        }
+
+        #[task(priority = 3, shared = [device])]
+        async fn populate_rx_buffers(mut ctx: populate_rx_buffers::Context, cause: InterruptCause) {
+            ctx.shared
+                .device
+                .lock(|d| crate::net_device::populate_rx_buffers(d, cause));
         }
 
         #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
