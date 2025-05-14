@@ -161,13 +161,10 @@ impl<F: OnMessage> Mqtt<F> {
         topics: &[minimq::types::TopicFilter<'_>],
         properties: &[minimq::Property<'_>],
     ) -> Result<(), minimq::Error<NetError>> {
-        if let Poll::Ready(v) = self.poll() {
-            return v.map(|_| ());
-        }
-
         core::future::poll_fn(|_| {
-            if let Poll::Ready(v) = self.poll() {
-                return Poll::Ready(v.map(|_| ()));
+            if let Poll::Ready(err) = self.poll() {
+                let Err(err) = err;
+                return Poll::Ready(Err(err));
             }
             let minimq = get_minimq(&mut self.minimq, &mut self.rest);
             match minimq.client().subscribe(topics, properties) {
@@ -179,8 +176,9 @@ impl<F: OnMessage> Mqtt<F> {
         .await?;
 
         core::future::poll_fn(|_| {
-            if let Poll::Ready(v) = self.poll() {
-                return Poll::Ready(v.map(|_| ()));
+            if let Poll::Ready(err) = self.poll() {
+                let Err(err) = err;
+                return Poll::Ready(Err(err));
             }
             let minimq = get_minimq(&mut self.minimq, &mut self.rest);
             if minimq.client().subscriptions_pending() {

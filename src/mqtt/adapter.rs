@@ -233,7 +233,9 @@ async fn adapter_task(
                     .await
                     .map_err(NetError::TcpConnectError);
 
-                poll_fn(|cx| Poll::Ready(cx.waker().wake_by_ref())).await;
+                if result.is_ok() {
+                    poll_fn(|cx| Poll::Ready(cx.waker().wake_by_ref())).await;
+                }
 
                 #[cfg(feature = "tls")]
                 if let Some(tls) = tls.as_mut() {
