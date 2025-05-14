@@ -320,6 +320,17 @@ impl EmbeddedNalAdapter {
     fn poll(&mut self) {
         let mut ctx = Context::from_waker(&self.waker);
         _ = self.fut.as_mut().poll(&mut ctx);
+
+        let state = self.net.lock(|net| {
+            net.sockets
+                .get_mut::<tcp::Socket>(self.socket_handle)
+                .state()
+        });
+
+        if state == tcp::State::CloseWait {
+            // We want `minimq` to issue a `receive` and get `Ok(0)`.
+            self.waker.wake_by_ref();
+        }
     }
 
     fn setup_wakers(&mut self, handle: SocketHandle) {

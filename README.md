@@ -19,4 +19,3 @@ configure other env variables in `.cargo/config.toml`.
 ## Todo
 
 - Real time metrics
-- Cannot reconnect to MQTT broker after it resets
