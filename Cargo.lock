@@ -1325,7 +1325,6 @@ dependencies = [
  "log",
  "minimq",
  "picoserve",
- "ra-fsp-ethernet",
  "ra-fsp-sys",
  "rand_chacha",
  "replace_with",
@@ -1348,20 +1347,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "ra-fsp-ethernet"
-version = "0.1.0"
-dependencies = [
- "bindgen 0.71.1",
- "ra-fsp-sys",
-]
-
-[[package]]
 name = "ra-fsp-sys"
 version = "0.1.1"
 dependencies = [
  "bindgen 0.69.5",
  "build_cfg",
  "cc",
+ "cortex-m",
  "log",
  "ra6m3",
  "walkdir",

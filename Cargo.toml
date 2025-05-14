@@ -6,8 +6,7 @@ edition = "2024"
 [dependencies]
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
-ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/", features = ["ra6m3", "mod-r_ether_phy_target_ksz8091rnb"], optional = true }
-ra-fsp-ethernet = { path = "/home/ddystopia/job/ra-fsp-ethernet", features = ["ra6m3"], optional = true }
+ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
@@ -35,19 +34,25 @@ strum = { version = "0.27.1", features = ["derive"], default-features = false }
 # rtt-target = { version = "0.6.1", features = ["log"], optional = true }
 rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", features = ["log"], optional = true }
 sha2 = { version = "0.10.8", default-features = false }
+rand_core = "0.6.4"
+
+[patch."https://github.com/rtic-rs/rtic"]
+rtic-macros = { path = "/home/ddystopia/code/clones/rtic/rtic-macros" }
 
 [profile.release]
 opt-level = 's'
 
 [profile.dev]
 opt-level = 0
+lto = true
+codegen-units = 1
 
 [features]
 # default = ["qemu"]
 default = ["ra6m3", "log", "tls"]
 # default = ["ra6m3"]
 tls = ["dep:embedded-tls"]
-ra6m3 = ["dep:ra-fsp-sys", "dep:ra-fsp-ethernet"]
+ra6m3 = ["dep:ra-fsp-sys"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
 defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
 log = ["dep:log", "dep:rtt-target", "smoltcp/log"]
