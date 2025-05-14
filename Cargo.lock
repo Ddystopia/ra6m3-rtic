@@ -1327,6 +1327,7 @@ dependencies = [
  "picoserve",
  "ra-fsp-sys",
  "rand_chacha",
+ "rand_core",
  "replace_with",
  "rtic",
  "rtic-monotonics",

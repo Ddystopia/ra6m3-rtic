@@ -35,6 +35,10 @@ impl Dev {
             tx: [0; MTU],
         }
     }
+
+    pub fn is_up(&self) -> bool {
+        true
+    }
 }
 
 impl Drop for Dev {

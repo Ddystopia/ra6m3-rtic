@@ -148,6 +148,7 @@ async fn handle_tls_session(
 
     loop {
         match dequeue(rx, waiting_for_message).await {
+            // may happen when broker sends rst to us
             AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
@@ -209,6 +210,7 @@ async fn adapter_task(
 
     loop {
         match dequeue(rx, waiting_for_message).await {
+            // may happen when broker sends rst to us
             AdapterMessageIn::Connect(_) if connected => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Connect(socket_addr) => {
                 tx.set(Some(AdapterMessageOut::Connect(Poll::Pending)));
@@ -379,6 +381,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
         _handle: &mut Self::TcpSocket,
         remote: core::net::SocketAddr,
     ) -> nb::Result<(), Self::Error> {
+        trace!("Connect to MQTT TCP socket");
         let old_remote = *self.remote.get_or_insert(remote);
 
         assert_eq!(
@@ -454,6 +457,7 @@ impl TcpClientStack for EmbeddedNalAdapter {
     }
 
     fn close(&mut self, _handle: Self::TcpSocket) -> Result<(), Self::Error> {
+        trace!("Close MQTT TCP socket");
         match self.message(AdapterMessageIn::Close) {
             Ok(AdapterMessageOut::Close(Poll::Ready(res))) => res,
             Err(_) | Ok(AdapterMessageOut::Close(Poll::Pending)) => {

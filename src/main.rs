@@ -22,7 +22,9 @@ mod logger_setup;
 #[cfg(feature = "ra6m3")]
 #[path = "net_ra6m3.rs"]
 mod net_device;
+// mod rand;
 
+#[cfg(feature = "ra6m3")]
 mod io_ports;
 
 mod log {
@@ -43,6 +45,7 @@ mod socket;
 mod socket_storage;
 mod util;
 
+#[cfg(feature = "ra6m3")]
 use ra_fsp_sys::ioport::{IoPort, IoPortInstance};
 
 use bare_metal::CriticalSection;
@@ -51,7 +54,6 @@ use conf::{
     SYS_TICK_HZ,
 };
 use diatomic_waker::{DiatomicWaker, WakeSinkRef, WakeSourceRef};
-#[cfg(feature = "ra6m3")]
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
 use smoltcp::{
@@ -65,6 +67,7 @@ use socket_storage::{SocketStorage, TcpSocketStorage};
 type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
 type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
 
+#[cfg(feature = "ra6m3")]
 ra_fsp_sys::event_link_select! {
     ra_fsp_sys::ELC_EVENT_EDMAC0_EINT => ra_fsp_sys::Interrupt::IEL0,
 }
@@ -85,13 +88,10 @@ fn smol_now() -> smoltcp::time::Instant {
 }
 
 fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
-    use core::pin::Pin;
-
     ctx.core.SCB.set_sleepdeep();
 
-    let mut io_port = Pin::static_mut(ctx.local.io_port); // we may put it in `Shared`
-
-    io_port
+    #[cfg(feature = "ra6m3")]
+    core::pin::Pin::static_mut(ctx.local.io_port)
         .as_mut()
         .open(&io_ports::BSP_PIN_CFG)
         .expect("Failed to open ioports");
