@@ -6,11 +6,11 @@ edition = "2024"
 [dependencies]
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
-ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
+ra-fsp-rs = { git = "https://github.com/Ddystopia/ra-fsp-rs", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
-rtic = { git = "https://github.com/rtic-rs/rtic", features = ["thumbv7-backend"] }
+rtic = { git = "https://github.com/rtic-rs/rtic", features = ["cortex-m", "thumbv7-backend"] }
 rtic-monotonics = { version = "2.0.3", features = ["cortex-m-systick"] }
 defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
 log = { version = "0.4.27", features = ["release_max_level_info"], default-features = false, optional = true }
@@ -39,6 +39,12 @@ rand_core = "0.6.4"
 [patch."https://github.com/rtic-rs/rtic"]
 rtic-macros = { path = "/home/ddystopia/code/clones/rtic/rtic-macros" }
 
+[patch."https://github.com/Ddystopia/ra-fsp-rs"]
+ra-fsp-rs = { path = "/home/ddystopia/job/ra-fsp-rs/" }
+
+[patch."https://github.com/Ddystopia/ra-fsp-sys"]
+ra-fsp-sys = { path = "/home/ddystopia/job/ra-fsp-sys/"  }
+
 [profile.release]
 opt-level = 's'
 
@@ -51,7 +57,7 @@ codegen-units = 1
 default = ["qemu", "defmt"]
 # default = ["ra6m3", "log", "tls"]
 tls = ["dep:embedded-tls"]
-ra6m3 = ["dep:ra-fsp-sys"]
+ra6m3 = ["dep:ra-fsp-rs"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
 defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
 log = ["dep:log", "dep:rtt-target", "smoltcp/log"]

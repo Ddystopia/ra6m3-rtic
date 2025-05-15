@@ -4,6 +4,8 @@
 #![feature(try_blocks)]
 #![feature(type_alias_impl_trait)]
 
+use ra_fsp_rs::pac;
+
 #[cfg(all(feature = "qemu", feature = "defmt"))]
 #[path = "defmt_semihosting.rs"]
 mod logger_setup;
@@ -46,7 +48,7 @@ mod socket_storage;
 mod util;
 
 #[cfg(feature = "ra6m3")]
-use ra_fsp_sys::ioport::{IoPort, IoPortInstance};
+use ra_fsp_rs::ioport::{IoPort, IoPortInstance};
 
 use bare_metal::CriticalSection;
 use conf::{
@@ -68,8 +70,8 @@ type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
 type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
 
 #[cfg(feature = "ra6m3")]
-ra_fsp_sys::event_link_select! {
-    ra_fsp_sys::ELC_EVENT_EDMAC0_EINT => ra_fsp_sys::Interrupt::IEL0,
+ra_fsp_rs::event_link_select! {
+    ra_fsp_rs::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
 }
 
 // fixme: u32 overflow, as it is in milliseconds
@@ -144,7 +146,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 }
 
 fn init_network(
-    #[cfg(feature = "ra6m3")] etherc0: ra_fsp_sys::EDMAC0,
+    #[cfg(feature = "ra6m3")] etherc0: pac::EDMAC0,
     #[cfg(feature = "ra6m3")] _nvic: &mut cortex_m::peripheral::NVIC,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
@@ -361,12 +363,12 @@ mod ra6m3_app {
     use super::*;
 
     #[rtic::app(
-      device = ra_fsp_sys,
+      device = pac,
       dispatchers = [IEL95, IEL94, IEL93, IEL92, IEL91, IEL90, IEL89, IEL88],
       peripherals = true
     )]
     mod app {
-        use ra_fsp_sys::ether::InterruptCause;
+        use ra_fsp_rs::ether::InterruptCause;
 
         use super::*;
 
@@ -447,7 +449,7 @@ mod ra6m3_app {
         }
 
         #[task(priority = 1)]
-        async fn blinky(_ctx: blinky::Context, port1: ra_fsp_sys::PORT1, port4: ra_fsp_sys::PORT4) {
+        async fn blinky(_ctx: blinky::Context, port1: pac::PORT1, port4: pac::PORT4) {
             const PERIOD_MS: u32 = 100;
 
             let mut next = Mono::now();

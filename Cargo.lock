@@ -1325,7 +1325,7 @@ dependencies = [
  "log",
  "minimq",
  "picoserve",
- "ra-fsp-sys",
+ "ra-fsp-rs",
  "rand_chacha",
  "rand_core",
  "replace_with",
@@ -1345,6 +1345,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1f1914ce909e1658d9907913b4b91947430c7d9be598b15a1912935b8c04801"
 dependencies = [
  "proc-macro2",
+]
+
+[[package]]
+name = "ra-fsp-rs"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "log",
+ "ra-fsp-sys",
 ]
 
 [[package]]

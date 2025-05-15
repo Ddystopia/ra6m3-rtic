@@ -1,4 +1,4 @@
-use ra_fsp_sys::ioport::{
+use ra_fsp_rs::ioport::{
     IoPortConfig, e_bsp_io_port_pin_t::*, e_ioport_cfg_options::*, e_ioport_peripheral::*,
     ioport_cfg_t, ioport_pin_cfg_t,
 };

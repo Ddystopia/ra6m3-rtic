@@ -3,14 +3,15 @@ use crate::log::*;
 use core::{cell::RefCell, pin::Pin};
 
 use bare_metal::CriticalSection;
-use ra_fsp_sys::{
-    Interrupt,
+use ra_fsp_rs::{
     ether::{
         self, Buffer, Buffers, Descriptor, EtherConfig, EtherInstance, InterruptCause,
         ether_callback_args_t,
     },
     ether_phy::{self, e_ether_phy_lsi_type, e_ether_phy_mii_type},
 };
+use crate::pac::Interrupt;
+use crate::pac;
 use smoltcp::{
     phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken},
     time::Instant,
@@ -27,7 +28,7 @@ pub const ETH_N_RX_DESC: usize = 4;
 static ETH0: ConstStaticCell<EtherInstance<MTU>> =
     ConstStaticCell::new(EtherInstance::<MTU>::new());
 
-static PHY0: ether_phy::ether_phy_instance_t = ra_fsp_sys::const_c_dyn!(ether_phy, &PHY0_CFG);
+static PHY0: ether_phy::ether_phy_instance_t = ra_fsp_rs::const_c_dyn!(ether_phy, &PHY0_CFG);
 
 // todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
 //       that way, we don't need to have a large buffer for smaller stuff, right? Not sure
@@ -81,7 +82,7 @@ pub struct EthernetTxToken<'a>(
 );
 
 impl Dev {
-    pub fn new(_cs: CriticalSection<'_>, _: ra_fsp_sys::EDMAC0) -> Self {
+    pub fn new(_cs: CriticalSection<'_>, _: pac::EDMAC0) -> Self {
         let conf = CONF.take();
 
         conf.p_mac_address = {
@@ -248,7 +249,7 @@ impl Drop for EthernetTxToken<'_> {
 
 pub use ether::ether_eint_isr as ethernet_isr_handler;
 
-extern "C" fn user_ethernet_callback(args: &ether_callback_args_t) {
+extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
     let cause = ether::interrupt_cause(args);
 
     let receive = cause.receive;
