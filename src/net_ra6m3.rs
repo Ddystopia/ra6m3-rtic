@@ -99,15 +99,12 @@ impl Dev {
             RX_BUFFERS.take().each_mut(),
         )));
 
-        // conf.interrupt_priority = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0) as u32;
-        // todo: ask stano what is happening, why 14 here == 224 from nvic and 2 from rtic
-        conf.interrupt_priority = 14;
+        conf.unchange_irq_priority();
 
         let before = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
 
         let mut eth = Pin::static_mut(ETH0.take());
 
-        // todo: mark unsafe because it allows overwriding the priority
         eth.as_mut().open(conf).expect("Failed to open ethernet");
 
         let after = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
