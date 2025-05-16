@@ -71,7 +71,7 @@ type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
 
 #[cfg(feature = "ra6m3")]
 ra_fsp_rs::event_link_select! {
-    ra_fsp_rs::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
 }
 
 // fixme: u32 overflow, as it is in milliseconds
