@@ -16,7 +16,7 @@ mod logger_setup;
 #[path = "net_semihosting.rs"]
 mod net_device;
 
-// todo: if link is down for long, needs reset for ping to work
+// fixme: if link is down for long, needs reset for ping to work
 
 #[cfg(all(feature = "ra6m3", feature = "log"))]
 #[path = "log_ra6m3.rs"]
@@ -74,7 +74,7 @@ ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
 }
 
-// fixme: u32 overflow, as it is in milliseconds
+// fixme: use GPT and u64 instead of SYST
 systick_monotonic!(Mono, CLOCK_HZ);
 
 const NET_WAKER: core::task::Waker = util::waker(|| _ = app::poll_network::spawn().ok());
@@ -327,7 +327,6 @@ mod qemu_app {
             http::http(ctx, socket).await
         }
 
-        // todo: is there a reason to give this task higher priority?
         #[task(binds = ETHERNET, priority = 2, shared = [device])]
         fn ethernet_isr(mut ctx: ethernet_isr::Context) {
             let cause = ctx.shared.device.lock(net_device::isr_handler);
