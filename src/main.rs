@@ -147,6 +147,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
 fn init_network(
     #[cfg(feature = "ra6m3")] etherc0: pac::EDMAC0,
+    // fixme: maybe require &mut NVIC for eth open? It is using set_priority inside
     #[cfg(feature = "ra6m3")] _nvic: &mut cortex_m::peripheral::NVIC,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
@@ -213,7 +214,7 @@ async fn waiter(_: app::waiter::Context<'_>) -> ! {
     core::future::pending().await
 }
 
-async fn poll_network(mut ctx: app::poll_network::Context<'_>) {
+fn poll_network(mut ctx: app::poll_network::Context<'_>) {
     let net = &mut ctx.shared.net;
     let dev = &mut ctx.shared.device;
 
@@ -338,7 +339,7 @@ mod qemu_app {
 
         #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
         async fn poll_network(ctx: poll_network::Context) {
-            super::poll_network(ctx).await
+            super::poll_network(ctx);
         }
 
         #[task(priority = 1, shared = [next_net_poll])]
@@ -427,7 +428,7 @@ mod ra6m3_app {
 
         #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
         async fn poll_network(ctx: poll_network::Context) {
-            super::poll_network(ctx).await
+            super::poll_network(ctx);
         }
 
         #[task(priority = 1, shared = [next_net_poll])]
@@ -438,6 +439,9 @@ mod ra6m3_app {
             super::network_poll_scheduler(ctx, sink).await
         }
 
+        // fixme: this code was in NetxDuo. But I personally don't like polling
+        //        every 10ms. Maybe we can somehow trigger something etc.
+        //        I don't even rememeber teh point of that whole thing.
         #[task(priority = 1, shared = [device])]
         async fn network_link_poll(mut ctx: network_link_poll::Context) {
             let mut next = Mono::now();
