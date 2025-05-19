@@ -7,7 +7,7 @@ edition = "2024"
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
 ra-fsp-rs = { git = "https://github.com/Ddystopia/ra-fsp-rs", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
-ra6m3-pac = { git = "https://github.com/Ddystopia/ra", features = ["rt", "critical-section", "atomics"] }
+ra6m3-pac = { git = "https://github.com/Ddystopia/ra", features = ["rt", "critical-section", "atomics"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
@@ -61,7 +61,7 @@ codegen-units = 1
 default = ["qemu", "defmt"]
 # default = ["ra6m3", "log", "tls"]
 tls = ["dep:embedded-tls"]
-ra6m3 = ["dep:ra-fsp-rs"]
+ra6m3 = ["dep:ra-fsp-rs", "dep:ra6m3-pac"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
 defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
 log = ["dep:log", "dep:rtt-target", "smoltcp/log"]

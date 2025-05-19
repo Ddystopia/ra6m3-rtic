@@ -14,7 +14,7 @@ tasks:
 
   build-release:
     cmds:
-      - cargo build --release
+      - cargo build --release --no-default-features -Fqemu,defmt
 
   start-mqtt:
     cmds:

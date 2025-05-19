@@ -4,6 +4,7 @@
 #![feature(try_blocks)]
 #![feature(type_alias_impl_trait)]
 
+#[cfg(feature = "ra6m3")]
 use ra_fsp_rs::pac;
 
 #[cfg(all(feature = "qemu", feature = "defmt"))]
