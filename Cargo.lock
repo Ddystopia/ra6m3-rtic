@@ -644,7 +644,7 @@ dependencies = [
  "hkdf",
  "hmac",
  "p256",
- "portable-atomic 1.11.0",
+ "portable-atomic",
  "rand_core",
  "sha2",
  "signature",
@@ -1160,7 +1160,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 dependencies = [
  "critical-section",
- "portable-atomic 1.11.0",
+ "portable-atomic",
 ]
 
 [[package]]
@@ -1235,15 +1235,6 @@ dependencies = [
  "cpufeatures",
  "opaque-debug",
  "universal-hash",
-]
-
-[[package]]
-name = "portable-atomic"
-version = "0.3.20"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e30165d31df606f5726b090ec7592c308a0eaf61721ff64c9a3018e344a8753e"
-dependencies = [
- "portable-atomic 1.11.0",
 ]
 
 [[package]]
@@ -1335,7 +1326,6 @@ dependencies = [
  "minimq",
  "picoserve",
  "ra-fsp-rs",
- "ra6m3-pac",
  "rand_chacha",
  "rand_core",
  "replace_with",
@@ -1359,17 +1349,17 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-rs"
-version = "0.1.0"
+version = "0.1.3"
 dependencies = [
  "cortex-m",
  "log",
  "ra-fsp-sys",
- "ra6m3-pac",
+ "ra6m3-fsp-pac",
 ]
 
 [[package]]
 name = "ra-fsp-sys"
-version = "0.1.1"
+version = "0.1.3"
 dependencies = [
  "bindgen 0.69.5",
  "build_cfg",
@@ -1380,13 +1370,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ra6m3-pac"
-version = "0.1.0"
+name = "ra6m3-fsp-pac"
+version = "0.1.3"
 dependencies = [
  "cortex-m",
- "critical-section",
- "portable-atomic 0.3.20",
- "ra-fsp-sys",
  "vcell",
 ]
 
@@ -1459,7 +1446,7 @@ dependencies = [
  "bare-metal 1.0.0",
  "cortex-m",
  "critical-section",
- "portable-atomic 1.11.0",
+ "portable-atomic",
  "rtic-core",
  "rtic-macros",
 ]
@@ -1499,7 +1486,7 @@ dependencies = [
  "cfg-if",
  "cortex-m",
  "fugit",
- "portable-atomic 1.11.0",
+ "portable-atomic",
  "rtic-time",
 ]
 
@@ -1525,7 +1512,7 @@ dependencies = [
  "critical-section",
  "log",
  "once_cell",
- "portable-atomic 1.11.0",
+ "portable-atomic",
  "ufmt-write",
 ]
 
@@ -1734,7 +1721,7 @@ version = "2.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d89b0684884a883431282db1e4343f34afc2ff6996fe1f4a1664519b66e14c1e"
 dependencies = [
- "portable-atomic 1.11.0",
+ "portable-atomic",
 ]
 
 [[package]]
