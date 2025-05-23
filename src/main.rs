@@ -19,6 +19,8 @@ mod net_device;
 
 // fixme: if link is down for long, needs reset for ping to work
 
+#[cfg(feature = "ra6m3")]
+mod io_ports;
 #[cfg(all(feature = "ra6m3", feature = "log"))]
 #[path = "log_ra6m3.rs"]
 mod logger_setup;
@@ -26,9 +28,6 @@ mod logger_setup;
 #[path = "net_ra6m3.rs"]
 mod net_device;
 // mod rand;
-
-#[cfg(feature = "ra6m3")]
-mod io_ports;
 
 mod log {
     #![allow(unused_imports)]
