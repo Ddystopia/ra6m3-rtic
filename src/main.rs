@@ -221,6 +221,8 @@ fn poll_network(mut ctx: app::poll_network::Context<'_>) {
     let dev = &mut ctx.shared.device;
     let next_net_poll = &mut ctx.shared.next_net_poll;
 
+    // This is important because smoltcp will give `poll_at` at `now` is device is down,
+    // causing an infinite loop of polling.
     if !dev.lock(|dev| dev.is_up()) {
         return;
     }

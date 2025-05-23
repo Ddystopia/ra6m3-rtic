@@ -1,7 +1,9 @@
-use crate::{log::*, POLL_NETWORK};
+use crate::{POLL_NETWORK, log::*};
 
 use core::{cell::RefCell, pin::Pin};
 
+use crate::pac;
+use crate::pac::Interrupt;
 use bare_metal::CriticalSection;
 use ra_fsp_rs::{
     ether::{
@@ -10,8 +12,6 @@ use ra_fsp_rs::{
     },
     ether_phy::{self, e_ether_phy_lsi_type, e_ether_phy_mii_type},
 };
-use crate::pac::Interrupt;
-use crate::pac;
 use smoltcp::{
     phy::{ChecksumCapabilities, Device, DeviceCapabilities, Medium, RxToken, TxToken},
     time::Instant,
@@ -22,8 +22,6 @@ const MTU: usize = 1500;
 
 pub const ETH_N_TX_DESC: usize = 4;
 pub const ETH_N_RX_DESC: usize = 4;
-
-// looks like it became 27ms slower than previous unsafe version
 
 static ETH0: ConstStaticCell<EtherInstance<MTU>> =
     ConstStaticCell::new(EtherInstance::<MTU>::new());
@@ -153,6 +151,7 @@ impl Device for Dev {
                 EthernetTxToken(Some(tx), &self.eth),
             )),
             Err(ether::FSP_ERR_ETHER_ERROR_NO_DATA) => {
+                trace!("No data");
                 self.eth().as_mut().tx_buffer_update(tx);
                 None
             }
@@ -230,6 +229,7 @@ impl TxToken for EthernetTxToken<'_> {
 impl Drop for EthernetTxToken<'_> {
     fn drop(&mut self) {
         if let Some(buf) = self.0.take() {
+            trace!("Dropping Unused TxToken");
             let back = self.1.borrow_mut().as_mut().tx_buffer_update(buf);
 
             assert!(back.is_none(), "Going to leak the transmit buffer");
