@@ -78,7 +78,9 @@ ra_fsp_rs::event_link_select! {
 // fixme: use GPT and u64 instead of SYST
 systick_monotonic!(Mono, CLOCK_HZ);
 
-const NET_WAKER: core::task::Waker = util::waker(|| _ = app::poll_network::spawn().ok());
+#[allow(dead_code)] // maybe we will need this waker idk
+const NET_WAKER: core::task::Waker = util::waker(POLL_NETWORK);
+const POLL_NETWORK: fn() = || _ = app::poll_network::spawn().ok();
 
 pub struct Net {
     iface: Interface,
@@ -218,6 +220,7 @@ async fn waiter(_: app::waiter::Context<'_>) -> ! {
 fn poll_network(mut ctx: app::poll_network::Context<'_>) {
     let net = &mut ctx.shared.net;
     let dev = &mut ctx.shared.device;
+    let next_net_poll = &mut ctx.shared.next_net_poll;
 
     if !dev.lock(|dev| dev.is_up()) {
         return;
@@ -225,11 +228,9 @@ fn poll_network(mut ctx: app::poll_network::Context<'_>) {
 
     (&mut *net, &mut *dev).lock(|net, dev| net.iface.poll(smol_now(), dev, &mut net.sockets));
 
-    let poll_at = net.lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
-
-    ctx.shared
-        .next_net_poll
-        .lock(|next_net_poll| *next_net_poll = poll_at);
+    (&mut *net, next_net_poll).lock(|net, next_net_poll| {
+        *next_net_poll = net.iface.poll_at(smol_now(), &mut net.sockets)
+    });
 }
 
 /// This task is responsible for delayed polling of the network stack.
@@ -260,7 +261,7 @@ async fn network_poll_scheduler(
         };
         match futures_lite::future::or(receiver, race_delay).await {
             Event::Timeout(()) => {
-                NET_WAKER.wake_by_ref();
+                POLL_NETWORK();
                 delay = None
             }
             Event::NewTimeout(at) => {
@@ -333,7 +334,7 @@ mod qemu_app {
             let cause = ctx.shared.device.lock(net_device::isr_handler);
 
             if cause.map_or(false, |cause| cause.receive) {
-                NET_WAKER.wake_by_ref()
+                POLL_NETWORK();
             }
         }
 

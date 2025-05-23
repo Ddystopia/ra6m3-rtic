@@ -1,4 +1,4 @@
-use crate::log::*;
+use crate::{log::*, POLL_NETWORK};
 
 use core::{cell::RefCell, pin::Pin};
 
@@ -259,7 +259,7 @@ extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
     crate::app::populate_rx_buffers::spawn(cause).unwrap();
 
     if receive || transmits || went_up {
-        crate::NET_WAKER.wake_by_ref()
+        POLL_NETWORK();
     }
 }
 

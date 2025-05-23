@@ -103,7 +103,7 @@ impl<M: NetMutex> SocketInner<M> {
         self.net.lock(|net| {
             let socket = net.sockets.get_mut::<tcp::Socket>(self.handle);
             let res = f(socket, &mut net.iface);
-            crate::NET_WAKER.wake_by_ref(); // egress. todo: maybe separate those 2 concepts? to avoid circular dependencies
+            crate::POLL_NETWORK(); // egress. todo: maybe separate those 2 concepts? to avoid circular dependencies
             res
         })
     }
