@@ -146,11 +146,6 @@ impl Device for Dev {
     //       multiple tokens.
 
     fn receive(&mut self, _: Instant) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
-        if !self.eth().is_up() {
-            log::warn!("Ethernet is not up");
-            return None;
-        }
-
         let tx = self.send_buffer()?;
         match self.eth().read_zerocopy() {
             Ok((buf, len)) => Some((
@@ -170,10 +165,6 @@ impl Device for Dev {
     }
 
     fn transmit(&mut self, _: Instant) -> Option<Self::TxToken<'_>> {
-        if !self.eth().is_up() {
-            return None;
-        }
-
         Some(EthernetTxToken(Some(self.send_buffer()?), &self.eth))
     }
 
