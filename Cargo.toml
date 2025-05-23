@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
-ra-fsp-rs = { version = "0.1.3", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
+ra-fsp-rs = { version = "0.1.4", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
