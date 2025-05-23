@@ -3,3 +3,4 @@ lm3s6965evb_ethernet_sys/target
 /toolchain_m3
 type-sizes.txt
 *.pdf
+ozone.jdebug.user
