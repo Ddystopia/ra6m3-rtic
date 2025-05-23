@@ -1,27 +1,48 @@
 
 
-Breakpoint=/home/ddystopia/job/ra-fsp-sys/ra-fsp/ra/fsp/src/bsp/mcu/all/bsp_group_irq.c:104, State=BP_STATE_ON
-OpenDocument="startup.c", FilePath="/home/ddystopia/job/ra-fsp-sys/ra-fsp/ra/fsp/src/bsp/cmsis/Device/RENESAS/Source/startup.c", Line=53
-OpenDocument="bsp_group_irq.c", FilePath="/home/ddystopia/job/ra-fsp-sys/ra-fsp/ra/fsp/src/bsp/mcu/all/bsp_group_irq.c", Line=91
-OpenDocument="main.rs", FilePath="/home/ddystopia/code/ra6m3-rtic/src/main.rs", Line=344
-OpenDocument="ozone.jdebug", FilePath="/home/ddystopia/code/ra6m3-rtic/ozone.jdebug", Line=12
+Breakpoint=/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/src/bsp/mcu/all/bsp_group_irq.c:106:5, State=BP_STATE_DISABLED
+Breakpoint=/home/ddystopia/job/ra/ra-fsp-sys/src/lib.rs:87, State=BP_STATE_DISABLED
+Breakpoint=0x000008F8, State=BP_STATE_DISABLED
+OpenDocument="main.rs", FilePath="/home/ddystopia/code/ra6m3-rtic/src/main.rs", Line=358
+OpenDocument="asm.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cortex-m-0.7.7/src/asm.rs", Line=48
+OpenDocument="inline.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cortex-m-0.7.7/asm/inline.rs", Line=183
+OpenDocument="sha1.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lhash-1.1.0/src/sha1.rs", Line=90
+OpenDocument="startup.c", FilePath="/home/ddystopia/job/fw-micrortu/dep/fsp/ra/fsp/src/bsp/cmsis/Device/RENESAS/Source/startup.c", Line=57
+OpenDocument="roots.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-integer-0.1.46/src/roots.rs", Line=320
+OpenDocument="lib.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/const-sha1-0.3.0/src/lib.rs", Line=202
+OpenDocument="iterator.rs", FilePath="/rustc/bc821528634632b4ff8dee5ac1ea4ad90d1b3eb5/library/core/src/iter/traits/iterator.rs", Line=0
+OpenDocument="f2s.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ryu-1.0.20/src/f2s.rs", Line=150
+OpenDocument="properties.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/minimq-0.10.0/src/properties.rs", Line=190
+OpenDocument="tcp.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smoltcp-0.12.0/src/socket/tcp.rs", Line=2067
+OpenDocument="generic.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ppv-lite86-0.2.21/src/generic.rs", Line=157
+OpenDocument="util.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/p256-0.13.2/src/arithmetic/util.rs", Line=0
+OpenDocument="soft.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.10.9/src/sha512/soft.rs", Line=105
+OpenDocument="uint_macros.rs", FilePath="/home/ddystopia/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/num/uint_macros.rs", Line=290
+OpenDocument="macros.rs", FilePath="/rust/deps/compiler_builtins-0.1.159/src/macros.rs", Line=0
+OpenDocument="arm.rs", FilePath="/rust/deps/compiler_builtins-0.1.159/src/arm.rs", Line=0
+OpenDocument="soft.rs", FilePath="/home/ddystopia/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/sha2-0.10.9/src/sha256/soft.rs", Line=141
+OpenDocument="option.rs", FilePath="/rustc/bc821528634632b4ff8dee5ac1ea4ad90d1b3eb5/library/core/src/option.rs", Line=0
+OpenDocument="lib.rs", FilePath="/home/ddystopia/job/ra/ra-fsp-sys/src/lib.rs", Line=79
+OpenDocument="mod.rs", FilePath="/home/ddystopia/.rustup/toolchains/nightly-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/ptr/mod.rs", Line=785
+OpenDocument="impls.rs", FilePath="/rust/deps/compiler_builtins-0.1.159/src/mem/impls.rs", Line=0
+OpenDocument="ozone.jdebug", FilePath="/home/ddystopia/code/ra6m3-rtic/ozone.jdebug", Line=18
 OpenToolbar="Debug", Floating=0, x=0, y=0
-OpenWindow="Call Stack", DockArea=RIGHT, x=0, y=2, w=424, h=299, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
-OpenWindow="Registers 1", DockArea=RIGHT, x=0, y=0, w=424, h=115, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, FilteredItems=[], RefreshRate=1
-OpenWindow="Disassembly", DockArea=RIGHT, x=0, y=1, w=424, h=145, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
-OpenWindow="Break & Tracepoints", DockArea=LEFT, x=0, y=2, w=460, h=205, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, VectorCatchIndexMask=254
-OpenWindow="Memory 1", DockArea=BOTTOM, x=3, y=0, w=335, h=413, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, EditorAddress=0x0
-OpenWindow="Watched Data 1", DockArea=LEFT, x=0, y=1, w=460, h=156, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
-OpenWindow="Instruction Trace", DockArea=LEFT, x=0, y=0, w=460, h=198, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
-OpenWindow="Terminal", DockArea=BOTTOM, x=0, y=0, w=446, h=413, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
-OpenWindow="Timeline", DockArea=BOTTOM, x=2, y=0, w=721, h=413, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=1, DataPaneShown=0, PowerPaneShown=0, CodePaneShown=1, PinCursor="Cursor Movable", TimePerDiv="1 ns / Div", TimeStampFormat="Time", DataGraphDrawAsPoints=0, DataGraphLegendShown=0, DataGraphUniformSampleSpacing=0, DataGraphLegendPosition="530;0", DataGraphShowNamesAtCursor=0, PowerGraphDrawAsPoints=0, PowerGraphLegendShown=0, PowerGraphAvgFilterTime=Off, PowerGraphAvgFilterLen=Off, PowerGraphUniformSampleSpacing=0, PowerGraphLegendPosition="537;0", CodeGraphLegendShown=1, CodeGraphLegendPosition="458;0"
-OpenWindow="Console", DockArea=BOTTOM, x=1, y=0, w=400, h=413, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Call Stack", DockArea=RIGHT, x=0, y=2, w=424, h=159, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Registers 1", DockArea=RIGHT, x=0, y=0, w=424, h=182, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, FilteredItems=[], RefreshRate=1
+OpenWindow="Disassembly", DockArea=RIGHT, x=0, y=1, w=424, h=206, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Break & Tracepoints", DockArea=LEFT, x=0, y=1, w=736, h=202, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, VectorCatchIndexMask=254
+OpenWindow="Memory 1", DockArea=BOTTOM, x=3, y=0, w=335, h=425, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, EditorAddress=0x20003620
+OpenWindow="Watched Data 1", DockArea=LEFT, x=0, y=2, w=736, h=55, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Instruction Trace", DockArea=LEFT, x=0, y=0, w=736, h=290, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Terminal", DockArea=BOTTOM, x=0, y=0, w=446, h=425, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
+OpenWindow="Timeline", DockArea=BOTTOM, x=2, y=0, w=721, h=425, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0, DataPaneShown=0, PowerPaneShown=0, CodePaneShown=1, PinCursor="Cursor Movable", TimePerDiv="1 ns / Div", TimeStampFormat="Time", DataGraphDrawAsPoints=0, DataGraphLegendShown=0, DataGraphUniformSampleSpacing=0, DataGraphLegendPosition="530;0", DataGraphShowNamesAtCursor=0, PowerGraphDrawAsPoints=0, PowerGraphLegendShown=0, PowerGraphAvgFilterTime=Off, PowerGraphAvgFilterLen=Off, PowerGraphUniformSampleSpacing=0, PowerGraphLegendPosition="537;0", CodeGraphLegendShown=0, CodeGraphLegendPosition="425;0"
+OpenWindow="Console", DockArea=BOTTOM, x=1, y=0, w=400, h=425, FilterBarShown=0, TotalValueBarShown=0, ToolBarShown=0
 SmartViewPlugin="", Page="", Toolbar="Hidden", Window="SmartView 1"
 TableHeader="Vector Catches", SortCol="", SortOrder="ASCENDING", VisibleCols=["";"Vector Catch";"Description"], ColWidths=[50;300;500]
-TableHeader="Break & Tracepoints", SortCol="", SortOrder="DESCENDING", VisibleCols=["";"Type";"Location";"Extras"], ColWidths=[100;100;235;100]
+TableHeader="Break & Tracepoints", SortCol="", SortOrder="DESCENDING", VisibleCols=["";"Type";"Location";"Extras"], ColWidths=[100;100;235;301]
 TableHeader="Call Stack", SortCol="Function", SortOrder="ASCENDING", VisibleCols=["Function";"Stack Frame";"Source";"PC";"Return Address";"Stack Used"], ColWidths=[307;123;206;41;253;100]
 TableHeader="Power Sampling", SortCol="None", SortOrder="ASCENDING", VisibleCols=["Index";"Time";"Ch 0"], ColWidths=[100;100;100]
-TableHeader="Registers 1", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Value";"Description"], ColWidths=[205;102;259]
-TableHeader="Watched Data 1", SortCol="Expression", SortOrder="ASCENDING", VisibleCols=["Expression";"Value";"Location";"Refresh"], ColWidths=[189;207;100;100]
+TableHeader="Registers 1", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Value";"Description"], ColWidths=[152;102;259]
+TableHeader="Watched Data 1", SortCol="Expression", SortOrder="ASCENDING", VisibleCols=["Expression";"Value";"Location";"Refresh"], ColWidths=[189;207;100;240]
 TableHeader="RegisterSelectionDialog", SortCol="None", SortOrder="ASCENDING", VisibleCols=[], ColWidths=[]
 TableHeader="TargetExceptionDialog", SortCol="Name", SortOrder="ASCENDING", VisibleCols=["Name";"Value";"Address";"Description"], ColWidths=[201;151;123;890]
