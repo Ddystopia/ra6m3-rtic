@@ -35,7 +35,7 @@ void OnProjectLoad (void) {
   // User settings
   //
   Edit.SysVar (VAR_TRACE_CORE_CLOCK, 120000000);
-  File.Open ("$(ProjectDir)/target/thumbv7em-none-eabihf/debug/project");
+  File.Open ("$(ProjectDir)/target/thumbv7em-none-eabihf/release/project");
 }
 
 /*********************************************************************
