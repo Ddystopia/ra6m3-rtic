@@ -256,6 +256,8 @@ extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
 pub fn populate_rx_buffers(dev: &mut Dev, cause: InterruptCause) {
     if cause.went_up {
         dev.eth().as_mut().update_rx_buffers(cause);
+    } else if cause.transmits {
+        dev.eth().as_mut().update_tx_buffers(cause);
     }
 }
 
