@@ -172,7 +172,6 @@ impl Device for Dev {
         let mut caps = DeviceCapabilities::default();
         caps.medium = Medium::Ethernet;
         caps.max_transmission_unit = MTU;
-        // what does it mean? Am I using that right?
         caps.max_burst_size = Some(ETH_N_TX_DESC.min(ETH_N_RX_DESC));
         caps.checksum = ChecksumCapabilities::default();
         caps
