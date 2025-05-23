@@ -45,7 +45,7 @@ ra-fsp-sys = { path = "/home/ddystopia/job/ra/ra-fsp-sys/"  }
 ra6m3-pac = { path = "/home/ddystopia/job/ra/pac/ra6m3/", package = "ra6m3-fsp-pac" }
 
 [profile.release]
-opt-level = 's'
+opt-level = 's' # 's' is a lot faster than 'z', but size is relatively the same
 lto = true
 codegen-units = 1
 
