@@ -246,7 +246,9 @@ extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
     let transmits = cause.transmits;
     let went_up = cause.went_up;
 
-    crate::app::populate_rx_buffers::spawn(cause).unwrap();
+    if went_up || transmits {
+        crate::app::populate_rx_buffers::spawn(cause).unwrap();
+    }
 
     if receive || transmits || went_up {
         POLL_NETWORK();
