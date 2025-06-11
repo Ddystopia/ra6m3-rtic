@@ -1,6 +1,6 @@
 [build]
-# target = "thumbv7em-none-eabihf"
-target = "thumbv7em-none-eabi"
+target = "thumbv7em-none-eabihf"
+# target = "thumbv7em-none-eabi"
 
 [target.thumbv7em-none-eabihf]
 runner = "probe-rs run --chip R7FA6M3AH"
@@ -53,24 +53,23 @@ rustflags = [
 
 [env]
 # qemu
-CC = "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
-DEFMT_LOG = "trace,smoltcp=info,embedded_tls=info"
+# CC = "/home/ddystopia/code/ra6m3-rtic/toolchain_m3/arm-bare_newlibnanolto_cortex_m3-eabi/bin/arm-bare_newlibnanolto_cortex_m3-eabi-gcc"
+# DEFMT_LOG = "trace,smoltcp=info,embedded_tls=info"
 
 # ra6m3
 
-# CC = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
-# LD = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
-# AR = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-ar"
-# FSP_CFG = "/home/ddystopia/code/ra6m3-rtic/fsp_cfg/"
-# BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf"
+CC = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
+LD = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc"
+AR = "/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-ar"
+FSP_CFG = "/home/ddystopia/code/ra6m3-rtic/fsp_cfg/"
+BINDGEN_EXTRA_CLANG_ARGS = "--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf"
 
 # can't have higher optimization level because ethernet driver stops working
-# CFLAGS = """\
-#   -O1 \
-#   -isysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf \
-#   -Wall -mlittle-endian -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mno-unaligned-access --std=gnu11 \
-#   -ffunction-sections -fdata-sections -Woverride-init -fno-short-enums"""
-# ETHER_PHY_CFG_TARGET_KSZ8091RNB_ENABLE
+CFLAGS = """\
+  -O1 \
+  -isysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf \
+  -Wall -mlittle-endian -mthumb -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16 -mno-unaligned-access --std=gnu11 \
+  -ffunction-sections -fdata-sections -Woverride-init -fno-short-enums"""
 
 # Constants for application
 MAC = "fe:e3:a9:97:ad:ab"

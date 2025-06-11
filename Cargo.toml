@@ -53,8 +53,8 @@ codegen-units = 1
 opt-level = 0
 
 [features]
-default = ["qemu", "defmt"]
-# default = ["ra6m3", "log", "tls"]
+# default = ["qemu", "defmt"]
+default = ["ra6m3", "log", "tls"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra-fsp-rs"]
 qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
