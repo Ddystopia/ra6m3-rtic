@@ -9,6 +9,9 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rustc-link-search={}", out_dir.display());
 
+    println!("cargo:rerun-if-changed=script");
+    println!("cargo:rustc-link-search=script");
+
     if cfg!(feature = "qemu") {
         std::fs::copy("lm3s6965_memory.x", memory_x).unwrap();
     } else if cfg!(feature = "ra6m3") {
