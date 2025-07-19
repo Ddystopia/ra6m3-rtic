@@ -1440,8 +1440,8 @@ dependencies = [
 
 [[package]]
 name = "rtic"
-version = "2.1.2"
-source = "git+https://github.com/rtic-rs/rtic#f145203b549b2e727e3100c8a8d3453599350f6a"
+version = "2.2.0"
+source = "git+https://github.com/rtic-rs/rtic#c94dfcdd86574292748ef809c884f65c92e6cad2"
 dependencies = [
  "bare-metal 1.0.0",
  "cortex-m",
@@ -1468,7 +1468,8 @@ checksum = "d9369355b04d06a3780ec0f51ea2d225624db777acbc60abd8ca4832da5c1a42"
 
 [[package]]
 name = "rtic-macros"
-version = "2.1.2"
+version = "2.2.0"
+source = "git+https://github.com/rtic-rs/rtic#c94dfcdd86574292748ef809c884f65c92e6cad2"
 dependencies = [
  "indexmap",
  "proc-macro-error2",

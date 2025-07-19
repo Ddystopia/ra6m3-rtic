@@ -36,9 +36,6 @@ rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", features = ["
 sha2 = { version = "0.10.8", default-features = false }
 rand_core = "0.6.4"
 
-[patch."https://github.com/rtic-rs/rtic"]
-rtic-macros = { path = "/home/ddystopia/code/clones/rtic/rtic-macros" }
-
 [patch.crates-io]
 ra-fsp-rs = { path = "/home/ddystopia/job/ra/ra-fsp-rs/" }
 ra-fsp-sys = { path = "/home/ddystopia/job/ra/ra-fsp-sys/"  }
