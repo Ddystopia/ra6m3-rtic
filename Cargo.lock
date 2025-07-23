@@ -1349,17 +1349,18 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-rs"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "cortex-m",
  "log",
  "ra-fsp-sys",
  "ra6m3-fsp-pac",
+ "smoltcp",
 ]
 
 [[package]]
 name = "ra-fsp-sys"
-version = "0.1.7"
+version = "0.1.8"
 dependencies = [
  "bindgen 0.69.5",
  "build_cfg",
@@ -1370,9 +1371,9 @@ dependencies = [
 
 [[package]]
 name = "ra6m3-fsp-pac"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b95cbebe412aebd6866282884691d58354795cdb910123e1b20c52093553357"
+checksum = "deea9f4c4d422bc65f9879f987142eb8576cc6b5e3acb74680865e33e2b9c834"
 dependencies = [
  "cortex-m",
  "vcell",

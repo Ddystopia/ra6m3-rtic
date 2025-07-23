@@ -6,7 +6,6 @@ edition = "2024"
 [dependencies]
 lm3s6965 = { version = "0.2", optional = true }
 lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
-ra-fsp-rs = { version = "0.1.7", features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy"], optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
@@ -35,6 +34,11 @@ strum = { version = "0.27.1", features = ["derive"], default-features = false }
 rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", features = ["log"], optional = true }
 sha2 = { version = "0.10.8", default-features = false }
 rand_core = "0.6.4"
+
+[dependencies.ra-fsp-rs]
+version = "0.1.7"
+features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "smoltcp-ether"]
+optional = true 
 
 [patch.crates-io]
 ra-fsp-rs = { path = "/home/ddystopia/job/ra/ra-fsp-rs/" }

@@ -108,12 +108,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
 
     #[cfg(feature = "ra6m3")]
-    let (mut net, device, sockets) = init_network(
-        ctx.device.EDMAC0,
-        &mut ctx.core.NVIC,
-        ctx.cs,
-        ctx.local.sockets,
-    );
+    let (mut net, device, sockets) = init_network(&mut ctx.core.NVIC, ctx.cs, ctx.local.sockets);
     #[cfg(feature = "qemu")]
     let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
     let [mqtt_socket_handle, http_socket_handle] = sockets;
@@ -148,14 +143,13 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 }
 
 fn init_network(
-    #[cfg(feature = "ra6m3")] etherc0: pac::EDMAC0,
     // fixme: maybe require &mut NVIC for eth open? It is using set_priority inside
-    #[cfg(feature = "ra6m3")] _nvic: &mut cortex_m::peripheral::NVIC,
+    #[cfg(feature = "ra6m3")] nvic: &mut cortex_m::peripheral::NVIC,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
 ) -> (Net, net_device::Dev, [SocketHandle; 2]) {
     #[cfg(feature = "ra6m3")]
-    let mut device = net_device::Dev::new(cs, etherc0);
+    let mut device = net_device::create_dev(cs, nvic);
     #[cfg(not(feature = "ra6m3"))]
     let mut device = net_device::Dev::new(cs);
     let address = smoltcp::wire::EthernetAddress(MAC);
@@ -423,9 +417,7 @@ mod ra6m3_app {
 
         #[task(priority = 3, shared = [device])]
         async fn populate_rx_buffers(mut ctx: populate_rx_buffers::Context, cause: InterruptCause) {
-            ctx.shared
-                .device
-                .lock(|d| crate::net_device::populate_rx_buffers(d, cause));
+            ctx.shared.device.lock(|d| d.populate_rx_buffers(cause));
         }
 
         #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
