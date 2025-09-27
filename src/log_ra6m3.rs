@@ -3,7 +3,7 @@ pub fn init() {
         up: {
             0:{
                 size: 1024,
-                mode: rtt_target::ChannelMode::NoBlockSkip,
+                mode: rtt_target::ChannelMode::BlockIfFull,
                 name: "Terminal",
             }
         }
