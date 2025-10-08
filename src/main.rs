@@ -4,6 +4,13 @@
 #![feature(try_blocks)]
 #![feature(type_alias_impl_trait)]
 
+/*
+
+IMPORTANT: Run with debugger attached. If not, set logger channel to `NoBlockTrim`
+instead of `BlockIfFull`, or it won't work.
+
+*/
+
 #[cfg(feature = "ra6m3")]
 use ra_fsp_rs::pac;
 

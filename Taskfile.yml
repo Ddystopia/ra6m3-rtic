@@ -22,7 +22,21 @@ tasks:
 
   setup-tap:
     silent: true
+    cmds:
+      - |
+          ip link show tap0 > /dev/null && exit 0 || true;
+           sudo ip tuntap add tap0 mode tap user $USER ;
+           sudo ip addr flush dev tap0 ;
+      - task: setup-link-tap0
+
+  remove-tap:
+    cmds:
+      - sudo ip tuntap del tap0 mode tap
+
+  setup-link-*:
+    silent: true
     vars:
+      DEV: '{{ index .MATCH 0 }}'
       MQTT_IP_V4:
         sh: awk -F "=" '/^MQTT_BROKER_IP/ { gsub(/"/, "", $2); print $2 }' .cargo/config.toml | tr -d " "
       GATEWAY_IP_V4:
@@ -30,19 +44,13 @@ tasks:
       GATEWAY_IP_V6:
         sh: awk -F "=" '/^IP_V6_GATEWAY/ { gsub(/"/, "", $2); print $2 }' .cargo/config.toml | tr -d " "
     cmds:
+      - echo "Setting up link {{.DEV}} with IPs {{.MQTT_IP_V4}}, {{.GATEWAY_IP_V4}}, {{.GATEWAY_IP_V6}}"
       - |
-          ip link show tap0 > /dev/null && exit 0 || true;
-           sudo ip tuntap add tap0 mode tap user $USER ;
-           sudo ip addr flush dev tap0 ;
-           sudo ip link set tap0 up ;
-           sudo ip addr add {{.MQTT_IP_V4}}/24 dev tap0 ; # mqtt broker
-           sudo ip addr add {{.GATEWAY_IP_V4}}/24 dev tap0 ; # this device
-           sudo ip -6 addr add {{.GATEWAY_IP_V6}}/64 dev tap0 ;
-           sudo ip -6 route add {{.GATEWAY_IP_V6}}/64 dev tap0 ;
-
-  remove-tap:
-    cmds:
-      - sudo ip tuntap del tap0 mode tap
+           sudo ip link set {{.DEV}} up ;
+           sudo ip addr add {{.MQTT_IP_V4}}/24 dev {{.DEV}} ; # mqtt broker
+           sudo ip addr add {{.GATEWAY_IP_V4}}/24 dev {{.DEV}} ; # this device
+           sudo ip -6 addr add {{.GATEWAY_IP_V6}}/64 dev {{.DEV}} ;
+           sudo ip -6 route add {{.GATEWAY_IP_V6}}/64 dev {{.DEV}} ;
 
   run-debug-qemu:
     deps: [build-debug]
