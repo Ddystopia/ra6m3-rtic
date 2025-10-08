@@ -48,7 +48,7 @@ mod socket_storage;
 mod util;
 
 #[cfg(feature = "ra6m3")]
-use ra_fsp_rs::ioport::{IoPort, IoPortInstance};
+use ra_fsp_rs::ioport::IoPortInstance;
 
 use bare_metal::CriticalSection;
 use conf::{
@@ -94,11 +94,11 @@ fn smol_now() -> smoltcp::time::Instant {
 fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     ctx.core.SCB.set_sleepdeep();
 
-    #[cfg(feature = "ra6m3")]
-    core::pin::Pin::static_mut(ctx.local.io_port)
-        .as_mut()
-        .open(&io_ports::BSP_PIN_CFG)
-        .expect("Failed to open ioports");
+    let io_port = IoPortInstance::new(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
+    let io_port = ctx.local.io_port.get_or_insert(io_port);
+    let mut io_port = core::pin::Pin::static_mut(io_port);
+
+    io_port.as_mut().open().expect("Failed to open ioports");
 
     logger_setup::init();
 
@@ -108,7 +108,13 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
 
     #[cfg(feature = "ra6m3")]
-    let (mut net, device, sockets) = init_network(&mut ctx.core.NVIC, ctx.cs, ctx.local.sockets);
+    let (mut net, device, sockets) = init_network(
+        &mut ctx.core.NVIC,
+        ctx.device.EDMAC0,
+        ctx.device.ETHERC0,
+        ctx.cs,
+        ctx.local.sockets,
+    );
     #[cfg(feature = "qemu")]
     let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
     let [mqtt_socket_handle, http_socket_handle] = sockets;
@@ -144,12 +150,14 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
 fn init_network(
     // fixme: maybe require &mut NVIC for eth open? It is using set_priority inside
-    #[cfg(feature = "ra6m3")] nvic: &mut cortex_m::peripheral::NVIC,
+    nvic: &mut cortex_m::peripheral::NVIC,
+    edmac: pac::EDMAC0,
+    ether0: pac::ETHERC0,
     cs: CriticalSection<'_>,
     storage: &'static mut SocketStorage,
 ) -> (Net, net_device::Dev, [SocketHandle; 2]) {
     #[cfg(feature = "ra6m3")]
-    let mut device = net_device::create_dev(cs, nvic);
+    let mut device = net_device::create_dev(cs, nvic, edmac, ether0);
     #[cfg(not(feature = "ra6m3"))]
     let mut device = net_device::Dev::new(cs);
     let address = smoltcp::wire::EthernetAddress(MAC);
@@ -388,7 +396,7 @@ mod ra6m3_app {
         #[init(local = [
             sockets: SocketStorage = SocketStorage::new(),
             net_waker: DiatomicWaker = DiatomicWaker::new()
-            io_port: IoPortInstance = IoPortInstance::new(),
+            io_port: Option<IoPortInstance> = None,
         ])]
         fn init(ctx: init::Context) -> (Shared, Local) {
             super::init(ctx)

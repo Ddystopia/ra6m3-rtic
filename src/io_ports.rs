@@ -1,9 +1,9 @@
 use ra_fsp_rs::ioport::{
     IoPortConfig, e_bsp_io_port_pin_t::*, e_ioport_cfg_options::*, e_ioport_peripheral::*,
-    ioport_cfg_t, ioport_pin_cfg_t,
+    ioport_pin_cfg_t,
 };
 
-pub static BSP_PIN_CFG: ioport_cfg_t = IoPortConfig::new(&[
+pub static BSP_PIN_CFG: IoPortConfig = IoPortConfig::new(&[
     ioport_pin_cfg_t {
         pin: BSP_IO_PORT_00_PIN_00,
         pin_cfg: IOPORT_CFG_ANALOG_ENABLE,
@@ -408,5 +408,4 @@ pub static BSP_PIN_CFG: ioport_cfg_t = IoPortConfig::new(&[
         pin: BSP_IO_PORT_11_PIN_01,
         pin_cfg: IOPORT_CFG_PERIPHERAL_PIN | IOPORT_PERIPHERAL_USB_HS,
     },
-])
-.c_conf();
+]);

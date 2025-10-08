@@ -8,6 +8,7 @@ use cortex_m::peripheral::NVIC;
 use ra_fsp_rs::{
     ether::{self, Buffer, Buffers, Descriptor, EtherConfig, EtherInstance, ether_callback_args_t},
     ether_phy::{self, e_ether_phy_lsi_type, e_ether_phy_mii_type},
+    pac,
 };
 use smoltcp::phy::{ChecksumCapabilities, DeviceCapabilities, Medium};
 use static_cell::{ConstStaticCell, StaticCell};
@@ -19,10 +20,8 @@ const MTU: usize = 1500;
 pub const ETH_N_TX_DESC: usize = 4;
 pub const ETH_N_RX_DESC: usize = 4;
 
-static ETH0: ConstStaticCell<EtherInstance<MTU>> =
-    ConstStaticCell::new(EtherInstance::<MTU>::new());
-
-static PHY0: ether_phy::ether_phy_instance_t = ra_fsp_rs::const_c_dyn!(ether_phy, &PHY0_CFG);
+static ETH0: StaticCell<EtherInstance<MTU>> = StaticCell::new();
+static PHY0: StaticCell<ether_phy::EtherPhyInstance> = StaticCell::new();
 
 // todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
 //       that way, we don't need to have a large buffer for smaller stuff, right? Not sure
@@ -38,8 +37,6 @@ static PHY0_CFG: ether_phy::EtherPhyConfig = ether_phy::EtherPhyConfig {
     mii_type: e_ether_phy_mii_type::ETHER_PHY_MII_TYPE_RMII,
 };
 
-// `core::array::from_fn` is not const yet
-
 static RX_DESCRIPTORS: ConstStaticCell<[Descriptor<MTU>; ETH_N_RX_DESC]> =
     ConstStaticCell::new([const { Descriptor::new() }; _]);
 static TX_DESCRIPTORS: ConstStaticCell<[Descriptor<MTU>; ETH_N_TX_DESC]> =
@@ -50,8 +47,39 @@ static TX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_TX_DESC]> =
 static RX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_RX_DESC]> =
     ConstStaticCell::new([const { Buffer::new() }; _]);
 
-static CONF: ConstStaticCell<EtherConfig<MTU>> = ConstStaticCell::new(
-    EtherConfig::new(&PHY0)
+extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
+    let cause = ether::interrupt_cause(args);
+
+    let receive = cause.receive;
+    let transmits = cause.transmits;
+    let went_up = cause.went_up;
+
+    if went_up || transmits {
+        // We need to access `Dev`.
+        crate::app::populate_rx_buffers::spawn(cause).expect(
+            "
+`populate_rx_buffers` should have enough priority to preempt\
+the current task, so we should always be able to spawn it.
+",
+        )
+    }
+
+    if receive || transmits || went_up {
+        POLL_NETWORK();
+    }
+}
+
+pub use ether::ether_eint_isr as ethernet_isr_handler;
+
+pub fn create_dev(
+    _cs: CriticalSection<'_>,
+    nvic: &mut NVIC,
+    edmac: pac::EDMAC0,
+    etherc: pac::ETHERC0,
+) -> Dev {
+    let phy = PHY0.init(ether_phy::EtherPhyInstance::new(edmac, PHY0_CFG));
+
+    let mut conf = EtherConfig::new(phy)
         .channel(0)
         .zerocopy()
         .multicast()
@@ -59,37 +87,7 @@ static CONF: ConstStaticCell<EtherConfig<MTU>> = ConstStaticCell::new(
         .flow_control()
         .broadcast_filter(0)
         .irq(Interrupt::IEL0)
-        .callback({
-            extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
-                let cause = ether::interrupt_cause(args);
-
-                let receive = cause.receive;
-                let transmits = cause.transmits;
-                let went_up = cause.went_up;
-
-                if went_up || transmits {
-                    // We need to access `Dev`.
-                    crate::app::populate_rx_buffers::spawn(cause).expect(
-                        "
-`populate_rx_buffers` should have enough priority to preempt\
-the current task, so we should always be able to spawn it.
-",
-                    )
-                }
-
-                if receive || transmits || went_up {
-                    POLL_NETWORK();
-                }
-            }
-
-            user_ethernet_callback
-        }),
-);
-
-pub use ether::ether_eint_isr as ethernet_isr_handler;
-
-pub fn create_dev(_cs: CriticalSection<'_>, nvic: &mut NVIC) -> Dev {
-    let conf = CONF.take();
+        .callback(user_ethernet_callback);
 
     conf.p_mac_address = {
         static MAC: StaticCell<[u8; 6]> = StaticCell::new();
@@ -110,7 +108,7 @@ pub fn create_dev(_cs: CriticalSection<'_>, nvic: &mut NVIC) -> Dev {
 
     let before = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
 
-    let mut eth = Pin::static_mut(ETH0.take());
+    let mut eth = Pin::static_mut(ETH0.init(EtherInstance::<MTU>::new(etherc)));
 
     eth.as_mut()
         .open(conf, nvic)
