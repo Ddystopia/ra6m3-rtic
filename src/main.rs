@@ -84,8 +84,6 @@ ra_fsp_rs::event_link_select! {
 // fixme: use GPT and u64 instead of SYST
 systick_monotonic!(Mono, CLOCK_HZ);
 
-#[allow(dead_code)] // maybe we will need this waker idk
-const NET_WAKER: core::task::Waker = util::waker(POLL_NETWORK);
 const POLL_NETWORK: fn() = || _ = app::poll_network::spawn().ok();
 
 pub struct Net {
