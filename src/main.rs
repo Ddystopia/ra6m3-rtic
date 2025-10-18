@@ -11,6 +11,7 @@ instead of `BlockIfFull`, or it won't work.
 
 */
 
+use ra_fsp_rs::gpt_timer_monotonic;
 #[cfg(feature = "ra6m3")]
 use ra_fsp_rs::pac;
 
@@ -49,6 +50,7 @@ mod log {
 mod conf;
 mod http;
 mod mqtt;
+mod network;
 mod poll_share;
 mod socket;
 mod socket_storage;
@@ -57,21 +59,15 @@ mod util;
 #[cfg(feature = "ra6m3")]
 use ra_fsp_rs::ioport::IoPortInstance;
 
-use bare_metal::CriticalSection;
-use conf::{
-    CLOCK_HZ, IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC,
-    SYS_TICK_HZ,
-};
-use diatomic_waker::{DiatomicWaker, WakeSinkRef, WakeSourceRef};
+use conf::{CLOCK_HZ, SYS_TICK_HZ};
+#[allow(unused_imports)]
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
-use smoltcp::{
-    iface::{Config, Interface, SocketHandle, SocketSet},
-    socket::tcp,
-    wire::{self, HardwareAddress, IpCidr},
-};
+use smoltcp::iface::SocketHandle;
 
-use socket_storage::{SocketStorage, TcpSocketStorage};
+use socket_storage::SocketStorage;
+
+pub use network::Net;
 
 type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
 type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
@@ -83,126 +79,50 @@ ra_fsp_rs::event_link_select! {
 
 // fixme: use GPT and u64 instead of SYST
 systick_monotonic!(Mono, CLOCK_HZ);
+gpt_timer_monotonic!(GptMono, 120_000_000);
 
-const POLL_NETWORK: fn() = || _ = app::poll_network::spawn().ok();
-
-pub struct Net {
-    iface: Interface,
-    sockets: SocketSet<'static>,
-}
-
-fn smol_now() -> smoltcp::time::Instant {
-    let ticks = Mono::now().ticks() as i64 * 1_000_000 / CLOCK_HZ as i64;
-    smoltcp::time::Instant::from_micros(ticks)
-}
+const POLL_NETWORK: fn() = network::request_network_poll;
 
 fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
-    ctx.core.SCB.set_sleepdeep();
-
-    let io_port = IoPortInstance::new(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
-    let io_port = ctx.local.io_port.get_or_insert(io_port);
-    let mut io_port = core::pin::Pin::static_mut(io_port);
-
-    io_port.as_mut().open().expect("Failed to open ioports");
-
     logger_setup::init();
 
     info!("Init start");
     info!("Size of tasks: {}b", ctx.executors_size);
 
+    ctx.core.SCB.set_sleepdeep();
+
+    let io_port = IoPortInstance::new(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
+    let io_port = ctx.local.io_port.get_or_insert(io_port);
+
+    io_port.open().expect("Failed to open ioports");
+
+    GptMono::start(gpt::open_gpt().expect("Failed to open GPT")).expect("Failed to start GPT");
+
     Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
 
     #[cfg(feature = "ra6m3")]
-    let (mut net, device, sockets) = init_network(
+    let (net, device, sockets) = network::init_network(
+        ctx.cs,
         &mut ctx.core.NVIC,
         ctx.device.EDMAC0,
         ctx.device.ETHERC0,
-        ctx.cs,
         ctx.local.sockets,
     );
+
     #[cfg(feature = "qemu")]
-    let (mut net, device, sockets) = init_network(ctx.cs, ctx.local.sockets);
+    let (mut net, device, sockets) = network::init_network(ctx.cs, ctx.local.sockets);
     let [mqtt_socket_handle, http_socket_handle] = sockets;
 
-    let sink = ctx.local.net_waker.sink_ref();
-    let net_poll_schedule_tx = sink.source_ref();
-
-    let next_net_poll = net.iface.poll_at(smol_now(), &mut net.sockets);
-
-    app::network_poll_scheduler::spawn(sink).ok();
-
-    app::waiter::spawn().ok();
-    app::mqtt_task::spawn(mqtt_socket_handle).ok();
-    app::http_task::spawn(http_socket_handle).ok();
-    #[cfg(feature = "ra6m3")]
-    app::network_link_poll::spawn().ok();
-    #[cfg(feature = "ra6m3")]
-    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).ok();
+    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).unwrap();
+    app::http_task::spawn(http_socket_handle).unwrap();
+    app::mqtt_task::spawn(mqtt_socket_handle).unwrap();
+    app::network_link_poll::spawn().unwrap();
+    app::network_poller::spawn().unwrap();
+    app::waiter::spawn().unwrap();
 
     info!("Init done");
 
-    (
-        app::Shared {
-            net,
-            device,
-            next_net_poll,
-        },
-        app::Local {
-            net_poll_schedule_tx,
-        },
-    )
-}
-
-fn init_network(
-    // fixme: maybe require &mut NVIC for eth open? It is using set_priority inside
-    nvic: &mut cortex_m::peripheral::NVIC,
-    edmac: pac::EDMAC0,
-    ether0: pac::ETHERC0,
-    cs: CriticalSection<'_>,
-    storage: &'static mut SocketStorage,
-) -> (Net, net_device::Dev, [SocketHandle; 2]) {
-    #[cfg(feature = "ra6m3")]
-    let mut device = net_device::create_dev(cs, nvic, edmac, ether0);
-    #[cfg(not(feature = "ra6m3"))]
-    let mut device = net_device::Dev::new(cs);
-    let address = smoltcp::wire::EthernetAddress(MAC);
-    let conf = Config::new(HardwareAddress::Ethernet(address));
-
-    let mut iface = Interface::new(conf, &mut device, smol_now());
-    let mut sockets = SocketSet::new(&mut storage.sockets[..]);
-
-    let mut add_tcp_socket = |s: &'static mut TcpSocketStorage| -> SocketHandle {
-        let rx = tcp::SocketBuffer::new(&mut s.rx_payload[..]);
-        let tx = tcp::SocketBuffer::new(&mut s.tx_payload[..]);
-        sockets.add(tcp::Socket::new(rx, tx))
-    };
-
-    let [mqtt, http, ..] = &mut storage.tcp_sockets;
-    let mqtt = add_tcp_socket(mqtt);
-    let http = add_tcp_socket(http);
-
-    iface.update_ip_addrs(|ip_addrs| {
-        trace!("Adding IP addresses");
-        ip_addrs.push(IpCidr::new(IP_V4, IP_V4_NETMASK)).unwrap();
-        #[cfg(feature = "ra6m3")]
-        info!("IPV4: {IP_V4}/{IP_V4_NETMASK}");
-        ip_addrs.push(IpCidr::new(IP_V6, IP_V6_NETMASK)).unwrap();
-        #[cfg(feature = "ra6m3")]
-        info!("IPV6: {IP_V6}");
-        let loopback = wire::IpAddress::v6(0xfe80, 0, 0, 0, 0, 0, 0, 1);
-        ip_addrs.push(IpCidr::new(loopback, 64)).unwrap();
-    });
-
-    iface
-        .routes_mut()
-        .add_default_ipv4_route(IP_V4_GATEWAY)
-        .unwrap();
-    iface
-        .routes_mut()
-        .add_default_ipv6_route(IP_V6_GATEWAY)
-        .unwrap();
-
-    (Net { iface, sockets }, device, [mqtt, http])
+    (app::Shared { net, device }, app::Local {})
 }
 
 async fn waiter(_: app::waiter::Context<'_>) -> ! {
@@ -221,70 +141,6 @@ async fn waiter(_: app::waiter::Context<'_>) -> ! {
     info!("Waiter task: 3 at {}", Mono::now().ticks());
 
     core::future::pending().await
-}
-
-fn poll_network(mut ctx: app::poll_network::Context<'_>) {
-    let net = &mut ctx.shared.net;
-    let dev = &mut ctx.shared.device;
-    let next_net_poll = &mut ctx.shared.next_net_poll;
-
-    // This is important because smoltcp will give `poll_at` at `now` is device is down,
-    // causing an infinite loop of polling.
-    if !dev.lock(|dev| dev.is_up()) {
-        return;
-    }
-
-    (&mut *net, &mut *dev).lock(|net, dev| net.iface.poll(smol_now(), dev, &mut net.sockets));
-
-    (&mut *net, next_net_poll).lock(|net, next_net_poll| {
-        *next_net_poll = net.iface.poll_at(smol_now(), &mut net.sockets)
-    });
-}
-
-/// This task is responsible for delayed polling of the network stack.
-/// It is used solely by `poll_network` to shcedule itself for `poll_at`.
-async fn network_poll_scheduler(
-    mut ctx: app::network_poll_scheduler::Context<'_>,
-    mut sink: WakeSinkRef<'static>,
-) {
-    let mut delay = None;
-
-    enum Event {
-        Timeout(()),
-        NewTimeout(smoltcp::time::Instant),
-    }
-
-    loop {
-        let receiver = sink.wait_until(|| {
-            ctx.shared
-                .next_net_poll
-                .lock(Option::take)
-                .map(Event::NewTimeout)
-        });
-        let race_delay = async move {
-            match delay {
-                Some(delay) => Event::Timeout(delay.await),
-                None => core::future::pending().await,
-            }
-        };
-        match futures_lite::future::or(receiver, race_delay).await {
-            Event::Timeout(()) => {
-                POLL_NETWORK();
-                delay = None
-            }
-            Event::NewTimeout(at) => {
-                crate::info!(
-                    "New Delay: {} micros (now is {} ticks)",
-                    at.total_micros(),
-                    Mono::now().ticks()
-                );
-                let total_micros = at.total_micros();
-                let total_millis_round_up = ((total_micros + 999) / 1000) as u32;
-                let next = Instant::from_ticks(total_millis_round_up);
-                delay = Some(Mono::delay_until(next));
-            }
-        }
-    }
 }
 
 #[cfg(feature = "qemu")]
@@ -385,22 +241,16 @@ mod ra6m3_app {
         #[shared]
         pub struct Shared {
             #[unsafe(link_section = ".noinit")]
-            pub net: Net,
+            pub net: network::Net,
             #[unsafe(link_section = ".noinit")]
             pub device: net_device::Dev,
-            #[unsafe(link_section = ".noinit")]
-            pub next_net_poll: Option<smoltcp::time::Instant>,
         }
 
         #[local]
-        pub struct Local {
-            #[unsafe(link_section = ".noinit")]
-            pub net_poll_schedule_tx: WakeSourceRef<'static>,
-        }
+        pub struct Local {}
 
         #[init(local = [
             sockets: SocketStorage = SocketStorage::new(),
-            net_waker: DiatomicWaker = DiatomicWaker::new()
             io_port: Option<IoPortInstance> = None,
         ])]
         fn init(ctx: init::Context) -> (Shared, Local) {
@@ -429,21 +279,13 @@ mod ra6m3_app {
         }
 
         #[task(priority = 3, shared = [device])]
-        async fn populate_rx_buffers(mut ctx: populate_rx_buffers::Context, cause: InterruptCause) {
-            ctx.shared.device.lock(|d| d.populate_rx_buffers(cause));
+        async fn populate_buffers(mut ctx: populate_buffers::Context, cause: InterruptCause) {
+            ctx.shared.device.lock(|d| d.populate_buffers(cause));
         }
 
-        #[task(priority = 2, shared = [net, device, next_net_poll], local = [net_poll_schedule_tx])]
-        async fn poll_network(ctx: poll_network::Context) {
-            super::poll_network(ctx);
-        }
-
-        #[task(priority = 1, shared = [next_net_poll])]
-        async fn network_poll_scheduler(
-            ctx: network_poll_scheduler::Context,
-            sink: WakeSinkRef<'static>,
-        ) {
-            super::network_poll_scheduler(ctx, sink).await
+        #[task(priority = 2, shared = [net, device])]
+        async fn network_poller(ctx: network_poller::Context) -> ! {
+            network::network_poller_task(ctx).await
         }
 
         // fixme: this code was in NetxDuo. But I personally don't like polling

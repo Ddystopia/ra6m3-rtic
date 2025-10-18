@@ -1,9 +1,4 @@
-use core::{
-    cell::Cell,
-    mem::transmute,
-    ops::Deref,
-    task::{RawWaker, RawWakerVTable, Waker},
-};
+use core::{cell::Cell, ops::Deref};
 
 use crate::log::*;
 use cortex_m::interrupt::Mutex;

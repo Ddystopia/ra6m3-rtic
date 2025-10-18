@@ -14,8 +14,8 @@ use smoltcp::{
     wire::{IpEndpoint, IpListenEndpoint},
 };
 
-use crate::poll_share::{NetMutex, TokenProvider};
 use crate::log::*;
+use crate::poll_share::{NetMutex, TokenProvider};
 
 /// Error returned by TcpSocket read/write functions.
 #[derive(PartialEq, Eq, Clone, Copy, Debug, strum::Display)]
@@ -848,7 +848,7 @@ mod picoserve_impl {
             let (mut rx, mut tx) = self.split();
 
             // Flush the write half until the read half has been closed by the client
-            futures_util::future::select(
+            futures_lite::future::or(
                 core::pin::pin!(async {
                     run_with_maybe_timeout(
                         timer,
@@ -863,10 +863,7 @@ mod picoserve_impl {
                     tx.flush().await.map_err(picoserve::Error::Write)?;
                     core::future::pending().await
                 }),
-            )
-            .await
-            .factor_first()
-            .0?;
+            ).await?;
 
             // Flush the write half until the socket is closed.
 

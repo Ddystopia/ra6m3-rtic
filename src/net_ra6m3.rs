@@ -56,9 +56,9 @@ extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
 
     if went_up || transmits {
         // We need to access `Dev`.
-        crate::app::populate_rx_buffers::spawn(cause).expect(
+        crate::app::populate_buffers::spawn(cause).expect(
             "
-`populate_rx_buffers` should have enough priority to preempt\
+`populate_buffers` should have enough priority to preempt\
 the current task, so we should always be able to spawn it.
 ",
         )
@@ -92,7 +92,7 @@ pub fn create_dev(
     conf.p_mac_address = {
         static MAC: StaticCell<[u8; 6]> = StaticCell::new();
 
-        let mut mac = crate::MAC;
+        let mut mac = crate::conf::MAC;
         mac.reverse();
         MAC.init(mac)
     };
