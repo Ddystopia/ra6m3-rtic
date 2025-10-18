@@ -1,9 +1,0 @@
-[package]
-name = "lm3s6965evb_ethernet_sys"
-version = "0.1.0"
-edition = "2024"
-keywords = ["lm3s6965", "lm3s6965evb", "ethernet", "no_std", "embedded"]
-
-[build-dependencies]
-bindgen = "0.71.1"
-cc = "1.2.6"

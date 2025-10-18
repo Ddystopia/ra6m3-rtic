@@ -3,18 +3,6 @@ use core::{cell::Cell, ops::Deref};
 use crate::log::*;
 use cortex_m::interrupt::Mutex;
 
-#[cfg(feature = "qemu")]
-pub fn exit() -> ! {
-    use cortex_m::asm::bkpt;
-    use cortex_m_semihosting::debug;
-    debug::exit(debug::EXIT_SUCCESS);
-
-    loop {
-        bkpt();
-    }
-}
-
-#[cfg(feature = "ra6m3")]
 pub fn exit() -> ! {
     use cortex_m::asm::bkpt;
 

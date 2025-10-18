@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-lm3s6965 = { version = "0.2", optional = true }
-lm3s6965evb_ethernet_sys = { path = "./lm3s6965evb_ethernet_sys", optional = true }
 # -F linker-plugin-lto and compatible llvm version
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"

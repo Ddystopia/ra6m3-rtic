@@ -71,20 +71,6 @@ async fn handle_connection(
 
 #[define_opaque(AppRouter)]
 pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
-    #[cfg(feature = "qemu")]
-    const HELLO_WORLD: &str = r#"<!DOCTYPE html>
-<html>
-<head>
-    <title>Qemu Picoserve</title>
-    <meta charset="utf-8">
-</head>
-<body>
-    <h1>Welcome to Qemu Picoserve</h1>
-    <p>This is a placeholder page.</p>
-</body>
-</html>
-"#;
-    #[cfg(feature = "ra6m3")]
     const HELLO_WORLD: &str = r#"<!DOCTYPE html>
 <html>
 <head>
