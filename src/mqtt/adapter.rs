@@ -9,11 +9,11 @@ use core::{
 use embedded_nal::{TcpClientStack, TcpError, nb};
 #[cfg(feature = "tls")]
 use embedded_tls::{TlsContext, TlsError, UnsecureProvider};
-use rtic_monotonics::{Monotonic, fugit::ExtU32};
+use rtic_monotonics::Monotonic;
 use smoltcp::{iface::SocketHandle, socket::tcp};
 
 use crate::{
-    Instant, Mono,
+    Instant, Mono, TimeExt,
     log::*,
     poll_share::TokenProvider,
     socket::{self, TcpSocket},
@@ -26,7 +26,7 @@ use super::NetLock;
 use super::tls_socket::TlsSocket;
 
 const MQTT_CLIENT_PORT: u16 = 58026;
-const RECONNECT_INTERVAL_MS: u32 = 2_000;
+const RECONNECT_INTERVAL_MS: crate::Ticks = 2_000;
 
 type AdapterFut = impl Future<Output = !>;
 

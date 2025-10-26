@@ -1,9 +1,9 @@
 use picoserve::{Config, response::File, routing::get_service};
-use rtic_monotonics::fugit::ExtU32;
 use smoltcp::iface::SocketHandle;
 use timer::Timer;
 
 use crate::{
+    TimeExt,
     poll_share::{self, TokenProvider},
     socket::TcpSocket,
     socket_storage::HTTP_BUFFER_SIZE,

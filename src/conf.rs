@@ -23,8 +23,6 @@ macro_rules! parse_ipv6 {
 }
 
 pub const CLOCK_HZ: u32 = 1_000;
-#[cfg(feature = "ra6m3")]
-pub const SYS_TICK_HZ: u32 = 150_000_000;
 pub const MAC: [u8; 6] = iter::collect_const!(u8 =>
     string::split(env!("MAC"), ":"),
         map(|s| parse_u8(s, 16, "Invalid MAC address")),

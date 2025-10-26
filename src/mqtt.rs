@@ -1,6 +1,7 @@
 use core::task::{Poll, Waker};
 
 use crate::{
+    TimeExt,
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS, MQTT_CLIENT_ID},
     log::*,
     poll_share::{self, TokenProvider},
@@ -8,7 +9,7 @@ use crate::{
 };
 use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError, TlsArgs};
 use minimq::{ConfigBuilder, Publication};
-use rtic_monotonics::{Monotonic, fugit::ExtU32};
+use rtic_monotonics::Monotonic;
 use smoltcp::iface::SocketHandle;
 
 #[cfg(feature = "tls")]
@@ -21,7 +22,7 @@ mod adapter;
 mod tls_socket;
 
 impl embedded_time::Clock for Mono {
-    type T = u32;
+    type T = crate::Ticks;
 
     const SCALING_FACTOR: embedded_time::rate::Fraction =
         embedded_time::rate::Fraction::new(1, crate::conf::CLOCK_HZ);

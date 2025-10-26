@@ -15,11 +15,9 @@ use smoltcp::{
 };
 
 use crate::{
-    Instant, Mono,
+    Duration, Instant, Mono,
     app::network_poller,
-    conf::{
-        CLOCK_HZ, IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC,
-    },
+    conf::{IP_V4, IP_V4_GATEWAY, IP_V4_NETMASK, IP_V6, IP_V6_GATEWAY, IP_V6_NETMASK, MAC},
     info, net_device,
     socket_storage::{SocketStorage, TcpSocketStorage},
     trace,
@@ -50,8 +48,9 @@ fn wait_until_network_poll_requested() -> impl Future<Output = ()> {
 }
 
 fn smol_now() -> smoltcp::time::Instant {
-    let ticks = Mono::now().ticks() as i64 * 1_000_000 / CLOCK_HZ as i64;
-    smoltcp::time::Instant::from_micros(ticks)
+    let duration = Mono::now().duration_since_epoch();
+    let micros = duration.to_micros() as i64;
+    smoltcp::time::Instant::from_micros(micros)
 }
 
 pub fn init_network(
@@ -145,11 +144,8 @@ fn poll_network(ctx: &mut network_poller::Context<'_>) -> Option<Instant> {
     let poll_at = (&mut *net).lock(|net| net.iface.poll_at(smol_now(), &mut net.sockets));
 
     poll_at.map(|at| {
-        let total_micros = at.total_micros();
-        // todo: isn't division costly there? Or is it optimized to shifts like ok?
-        //       maybe div by 1024 would be fine too?
-        let total_millis_round_up = ((total_micros + 999) / 1000) as u32;
-        Instant::from_ticks(total_millis_round_up)
+        let micros = at.total_micros() & (crate::Ticks::MAX as i64);
+        let duration = Duration::micros_at_least(micros as _);
+        Instant::from_ticks(duration.ticks())
     })
 }
-

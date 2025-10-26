@@ -43,7 +43,7 @@ mod util;
 
 use ra_fsp_rs::ioport::IoPortInstance;
 
-use conf::{CLOCK_HZ, SYS_TICK_HZ};
+use conf::CLOCK_HZ;
 #[allow(unused_imports)]
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
@@ -55,8 +55,10 @@ use network::Net;
 use net_ra6m3 as net_device;
 use log_ra6m3_setup as logger_setup;
 
-type Instant = fugit::Instant<u32, 1, CLOCK_HZ>;
-type Duration = fugit::Duration<u32, 1, CLOCK_HZ>;
+type Ticks = u64;
+use fugit::ExtU64 as TimeExt;
+type Instant = fugit::Instant<Ticks, 1, CLOCK_HZ>;
+type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
 ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
@@ -83,7 +85,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     GptMono::start(gpt::open_gpt().expect("Failed to open GPT")).expect("Failed to start GPT");
 
-    Mono::start(ctx.core.SYST, SYS_TICK_HZ); // How does this relate to CLOCK_HZ?
+    Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock_bm(ctx.cs));
 
     let (net, device, sockets) = network::init_network(
         ctx.cs,
@@ -200,7 +202,7 @@ mod app {
 
     #[task(priority = 1)]
     async fn blinky(_ctx: blinky::Context, port1: pac::PORT1, port4: pac::PORT4) {
-        const PERIOD_MS: u32 = 100;
+        const PERIOD_MS: Ticks = 100;
 
         let mut next = Mono::now();
         let mut i: usize = 0;
