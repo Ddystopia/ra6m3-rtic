@@ -58,6 +58,8 @@ async fn handle_connection(
         start_read_request: Some(5000.millis()),
         read_request: Some(1000.millis()),
         write: Some(5000.millis()),
+        // https://github.com/sammhicks/picoserve/issues/83
+        persistent_start_read_request: Some(100.millis()),
     });
 
     match picoserve::serve_with_state(app, Timer, &config, buf, socket, &()).await {
