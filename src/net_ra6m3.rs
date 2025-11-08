@@ -1,15 +1,15 @@
 use crate::POLL_NETWORK;
 
-use core::pin::Pin;
-
 use crate::pac::Interrupt;
-use bare_metal::CriticalSection;
 use cortex_m::peripheral::NVIC;
 use ra_fsp_rs::{
-    ether::{self, Buffer, Buffers, Descriptor, EtherConfig, EtherInstance, ether_callback_args_t},
+    ether::{self, Buffer, Buffers, Descriptor, Ether, EtherConfig},
     ether_phy::{self, e_ether_phy_lsi_type, e_ether_phy_mii_type},
     pac,
+    pin_init::InPlaceWrite,
+    state_markers::{Closed, Opened},
 };
+use rtic::export::CriticalSection;
 use smoltcp::phy::{ChecksumCapabilities, DeviceCapabilities, Medium};
 use static_cell::{ConstStaticCell, StaticCell};
 
@@ -20,8 +20,8 @@ const MTU: usize = 1500;
 pub const ETH_N_TX_DESC: usize = 4;
 pub const ETH_N_RX_DESC: usize = 4;
 
-static ETH0: StaticCell<EtherInstance<MTU>> = StaticCell::new();
-static PHY0: StaticCell<ether_phy::EtherPhyInstance> = StaticCell::new();
+static ETH0: StaticCell<Ether<MTU, Opened>> = StaticCell::new();
+static PHY0: StaticCell<ether_phy::EtherPhy<Closed>> = StaticCell::new();
 
 // todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
 //       that way, we don't need to have a large buffer for smaller stuff, right? Not sure
@@ -47,25 +47,27 @@ static TX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_TX_DESC]> =
 static RX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_RX_DESC]> =
     ConstStaticCell::new([const { Buffer::new() }; _]);
 
-extern "C" fn user_ethernet_callback(args: &mut ether_callback_args_t) {
-    let cause = ether::interrupt_cause(args);
+struct NetCallback;
 
-    let receive = cause.receive;
-    let transmits = cause.transmits;
-    let went_up = cause.went_up;
+impl ra_fsp_rs::Callback<ether::InterruptCause> for NetCallback {
+    fn call(_context: &Self, cause: ether::InterruptCause) {
+        let receive = cause.receive;
+        let transmits = cause.transmits;
+        let went_up = cause.went_up;
 
-    if went_up || transmits {
-        // We need to access `Dev`.
-        crate::app::populate_buffers::spawn(cause).expect(
-            "
+        if went_up || transmits {
+            // We need to access `Dev`.
+            crate::app::populate_buffers::spawn(cause).expect(
+                "
 `populate_buffers` should have enough priority to preempt\
 the current task, so we should always be able to spawn it.
 ",
-        )
-    }
+            )
+        }
 
-    if receive || transmits || went_up {
-        POLL_NETWORK();
+        if receive || transmits || went_up {
+            POLL_NETWORK();
+        }
     }
 }
 
@@ -73,11 +75,12 @@ pub use ether::ether_eint_isr as ethernet_isr_handler;
 
 pub fn create_dev(
     _cs: CriticalSection<'_>,
-    nvic: &mut NVIC,
+    _nvic: &mut NVIC,
     edmac: pac::EDMAC0,
     etherc: pac::ETHERC0,
 ) -> Dev {
-    let phy = PHY0.init(ether_phy::EtherPhyInstance::new(edmac, PHY0_CFG));
+    let initializer = ether_phy::EtherPhy::new(edmac, PHY0_CFG);
+    let Ok(phy) = PHY0.uninit().write_pin_init(initializer);
 
     let mut conf = EtherConfig::new(phy)
         .channel(0)
@@ -86,8 +89,7 @@ pub fn create_dev(
         .promiscuous()
         .flow_control()
         .broadcast_filter(0)
-        .irq(Interrupt::IEL0)
-        .callback(user_ethernet_callback);
+        .irq(Interrupt::IEL0);
 
     conf.p_mac_address = {
         static MAC: StaticCell<[u8; 6]> = StaticCell::new();
@@ -104,15 +106,20 @@ pub fn create_dev(
         RX_BUFFERS.take().each_mut(),
     )));
 
-    conf.unchange_irq_priority();
-
     let before = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
 
-    let mut eth = Pin::static_mut(ETH0.init(EtherInstance::<MTU>::new(etherc)));
+    let initializer = Ether::<MTU, Opened>::new(etherc, conf);
+
+    let mut eth = ETH0
+        .uninit()
+        .write_pin_init(initializer)
+        .expect("Failed to open ethernet");
 
     eth.as_mut()
-        .open(conf, nvic)
-        .expect("Failed to open ethernet");
+        .callback_set(&NetCallback)
+        .expect("Failed to set ethernet callback");
+
+    log::info!("Ethernet open() -> Ok(())");
 
     let after = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
 
@@ -147,6 +154,8 @@ pub fn eth0_mac_generate() -> [u8; 6] {
 }
 
 pub fn cpuid_get() -> [u32; 4] {
+    // maybe cortex_m::peripheral::Peripherals::steal().CPUID.???
+
     // see RA6M3 group reference manual 55.3.4
 
     // The FMIFRT is a read-only register that stores a base address

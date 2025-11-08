@@ -1,5 +1,6 @@
 #![no_main]
 #![no_std]
+
 #![feature(never_type)]
 #![feature(try_blocks)]
 #![feature(type_alias_impl_trait)]
@@ -51,9 +52,9 @@ use smoltcp::iface::SocketHandle;
 
 use socket_storage::SocketStorage;
 
-use network::Net;
-use net_ra6m3 as net_device;
 use log_ra6m3_setup as logger_setup;
+use net_ra6m3 as net_device;
+use network::Net;
 
 type Ticks = u64;
 use fugit::ExtU64 as TimeExt;
