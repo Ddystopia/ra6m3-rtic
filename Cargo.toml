@@ -13,7 +13,7 @@ defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
 log = { version = "0.4.27", features = ["release_max_level_info"], default-features = false, optional = true }
 konst = "0.3.16"
 bare-metal = "1.0.0"
-minimq = "0.10.0"
+minimq = { version = "0.10.0" }
 embedded-nal = "0.9.0"
 embedded-time = "0.12.1"
 futures-lite = { version = "2.6.0", default-features = false, features = [] }
@@ -41,6 +41,7 @@ optional = true
 [patch.crates-io]
 ra-fsp-rs = { path = "/home/ddystopia/job/ra/ra-fsp-rs/" }
 ra-fsp-sys = { path = "/home/ddystopia/job/ra/ra-fsp-sys/"  }
+minimq = { path = "/home/ddystopia/job/minimq/" }
 
 [profile.release]
 opt-level = 's' # 's' is a lot faster than 'z', but size is relatively the same
