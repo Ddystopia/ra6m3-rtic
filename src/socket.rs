@@ -1,6 +1,10 @@
 #![allow(dead_code)]
 
 // Credit: https://github.com/embassy-rs/embassy/blob/main/embassy-net/src/tcp.rs
+// TODO: they use too much with_mut to setup wakers. I interpret it as `egress`
+//       signal and poll the network... This is not appropriate.
+//       maybe add another function that will trigger the exgress/ingress poll
+//       of smoltcp and this code will trigger it itself, not I in with_mut
 
 use core::{
     future::poll_fn,

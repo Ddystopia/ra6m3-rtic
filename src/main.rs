@@ -10,9 +10,14 @@
 IMPORTANT: Run with debugger attached. If not, set logger channel to `NoBlockTrim`
 instead of `BlockIfFull`, or it won't work.
 
+todo:
+  R_BSP_GroupIrqWrite(BSP_GRP_IRQ_MPU_STACK, handle_stack_overflow);
+
+  And the stack we will be overflowing is interrupt stack, then where
+    `handle_stack_overflow` gets to run?
+
 */
 
-use ra_fsp_rs::gpt_timer_monotonic;
 use ra_fsp_rs::pac;
 
 // fixme: if link is down for long, needs reset for ping to work
@@ -22,6 +27,7 @@ mod io_ports;
 mod log_ra6m3_setup;
 mod net_ra6m3;
 // mod rand;
+// mod gpt;
 
 mod log {
     #![allow(unused_imports)]
@@ -65,9 +71,7 @@ ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
 }
 
-// fixme: use GPT and u64 instead of SYST
 systick_monotonic!(Mono, CLOCK_HZ);
-gpt_timer_monotonic!(GptMono, 120_000_000);
 
 const POLL_NETWORK: fn() = network::request_network_poll;
 
@@ -178,7 +182,7 @@ mod app {
         net_device::ethernet_isr_handler();
     }
 
-    #[task(priority = 3, shared = [device])]
+    #[task(priority = 3, shared = [device])] // priority of `ethernet_isr` + 1
     async fn populate_buffers(mut ctx: populate_buffers::Context, cause: InterruptCause) {
         ctx.shared.device.lock(|d| d.populate_buffers(cause));
     }

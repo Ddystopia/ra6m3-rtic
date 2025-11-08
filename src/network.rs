@@ -31,15 +31,13 @@ pub struct Net {
 static NETWORK_POLL_REQUEST: AtomicBool = AtomicBool::new(false);
 
 pub fn request_network_poll() {
-    // Wake happens-before the poll of the task, thus Relaxed ordering is sufficient
-    NETWORK_POLL_REQUEST.store(true, Ordering::Relaxed);
+    NETWORK_POLL_REQUEST.store(true, Ordering::Release);
     crate::app::network_poller::waker().wake();
 }
 
 fn wait_until_network_poll_requested() -> impl Future<Output = ()> {
     poll_fn(|_cx| {
-        // Poll happend-before this load while store happened-before the wake
-        if NETWORK_POLL_REQUEST.swap(false, Ordering::Relaxed) {
+        if NETWORK_POLL_REQUEST.swap(false, Ordering::Acquire) {
             Poll::Ready(())
         } else {
             Poll::Pending
@@ -100,19 +98,21 @@ pub fn init_network(
     (Net { iface, sockets }, device, [mqtt, http])
 }
 
+async fn wait_until(next_poll_at: &mut Option<Instant>) {
+    match *next_poll_at {
+        Some(at) => {
+            Mono::delay_until(at).await;
+            *next_poll_at = None;
+        }
+        None => core::future::pending().await,
+    }
+}
+
 #[inline(always)]
 pub async fn network_poller_task(mut ctx: network_poller::Context<'static>) -> ! {
     let mut next_poll_at = None;
     loop {
-        let poll_at = async {
-            match next_poll_at {
-                Some(at) => {
-                    Mono::delay_until(at).await;
-                    next_poll_at = None;
-                }
-                None => core::future::pending().await,
-            }
-        };
+        let poll_at = wait_until(&mut next_poll_at);
         let requested = wait_until_network_poll_requested();
 
         futures_lite::future::or(requested, poll_at).await;
