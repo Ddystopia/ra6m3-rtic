@@ -4,8 +4,8 @@ use core::{
     task::Poll,
 };
 
-use bare_metal::CriticalSection;
 use ra_fsp_rs::pac;
+use rtic::export::CriticalSection;
 use rtic::mutex_prelude::*;
 use rtic_monotonics::Monotonic;
 use smoltcp::{
