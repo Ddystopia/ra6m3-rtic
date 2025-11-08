@@ -48,9 +48,10 @@ mod socket;
 mod socket_storage;
 mod util;
 
-use ra_fsp_rs::ioport::IoPortInstance;
+use ra_fsp_rs::ioport::IoPort;
 
 use conf::CLOCK_HZ;
+use ra_fsp_rs::pin_init::InPlaceWrite;
 #[allow(unused_imports)]
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
@@ -83,14 +84,12 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     ctx.core.SCB.set_sleepdeep();
 
-    let io_port = IoPortInstance::new(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
-    let io_port = ctx.local.io_port.get_or_insert(io_port);
+    let io_port = IoPort::new(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
+    let Ok(mut io_port) = ctx.local.io_port.write_pin_init(io_port);
 
-    io_port.open().expect("Failed to open ioports");
+    io_port.as_mut().open().expect("Failed to open ioports");
 
-    GptMono::start(gpt::open_gpt().expect("Failed to open GPT")).expect("Failed to start GPT");
-
-    Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock_bm(ctx.cs));
+    Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
     let (net, device, sockets) = network::init_network(
         ctx.cs,
@@ -138,6 +137,8 @@ async fn waiter(_: app::waiter::Context<'_>) -> ! {
   peripherals = true
 )]
 mod app {
+    use core::mem::MaybeUninit;
+
     use ra_fsp_rs::ether::InterruptCause;
 
     use super::*;
@@ -155,7 +156,7 @@ mod app {
 
     #[init(local = [
         sockets: SocketStorage = SocketStorage::new(),
-        io_port: Option<IoPortInstance> = None,
+        io_port: MaybeUninit<IoPort> = MaybeUninit::uninit(),
     ])]
     fn init(ctx: init::Context) -> (Shared, Local) {
         super::init(ctx)
