@@ -59,7 +59,6 @@ opt-level = 0
 default = ["ra6m3", "log", "tls"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra-fsp-rs"]
-qemu = ["dep:lm3s6965", "dep:lm3s6965evb_ethernet_sys"]
 defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
 log = ["dep:log", "dep:rtt-target", "smoltcp/log"]
 
