@@ -56,8 +56,8 @@ debug = true
 opt-level = 0
 
 [features]
-# default = ["qemu", "defmt"]
-default = ["ra6m3", "log", "tls"]
+# default = ["ra6m3", "log", "tls"]
+default = ["ra6m3", "log"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra-fsp-rs"]
 defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
