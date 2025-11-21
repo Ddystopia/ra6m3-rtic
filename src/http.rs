@@ -1,13 +1,15 @@
+use core::mem::MaybeUninit;
+
 use picoserve::{Config, response::File, routing::get_service};
 use smoltcp::iface::SocketHandle;
 use timer::Timer;
 
 use crate::{
     TimeExt,
+    log::*,
     poll_share::{self, TokenProvider},
     socket::TcpSocket,
     socket_storage::HTTP_BUFFER_SIZE,
-    log::*,
 };
 
 // todo: use https://docs.rs/smoltcp/latest/smoltcp/socket/tcp/struct.Socket.html#method.set_timeout and others
@@ -19,7 +21,7 @@ pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
 pub type AppRouter = impl picoserve::routing::PathRouter<AppState>;
 
 pub struct Storage {
-    pub app: Option<picoserve::Router<AppRouter, AppState>>,
+    pub app: MaybeUninit<picoserve::Router<AppRouter, AppState>>,
     pub buf: [u8; HTTP_BUFFER_SIZE],
     pub token_place: poll_share::TokenProviderPlace<NetLock>,
 }
@@ -27,7 +29,7 @@ pub struct Storage {
 impl Storage {
     pub const fn new() -> Self {
         Self {
-            app: None,
+            app: MaybeUninit::uninit(),
             buf: [0; HTTP_BUFFER_SIZE],
             token_place: poll_share::TokenProviderPlace::new(),
         }
@@ -38,7 +40,7 @@ impl Storage {
 pub async fn http(ctx: crate::app::http_task::Context<'static>, socket_handle: SocketHandle) -> ! {
     let storage = ctx.local.storage;
     let net = TokenProvider::new(&mut storage.token_place, ctx.shared.net);
-    let app = storage.app.get_or_insert(make_app());
+    let app = storage.app.write(make_app());
 
     loop {
         let mut socket = TcpSocket::new(net, socket_handle);
