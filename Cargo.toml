@@ -35,7 +35,7 @@ rand_core = "0.6.4"
 
 [dependencies.ra-fsp-rs]
 version = "0.1.7"
-features = ["ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "smoltcp-ether"]
+features = ["device", "ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "mod-r_gpt", "smoltcp-ether", "rtic-monotonics-gpt"]
 optional = true 
 
 [patch.crates-io]
@@ -50,6 +50,7 @@ rtic = { path = "/home/ddystopia/code/clones/rtic/rtic/" }
 opt-level = 's' # 's' is a lot faster than 'z', but size is relatively the same
 lto = true
 codegen-units = 1
+debug = true
 
 [profile.dev]
 opt-level = 0

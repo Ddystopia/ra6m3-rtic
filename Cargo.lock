@@ -474,12 +474,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embassy-executor-timer-queue"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2fc328bf943af66b80b98755db9106bf7e7471b0cf47dc8559cd9a6be504cc9c"
-
-[[package]]
 name = "embassy-net"
 version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -543,16 +537,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a0a244c7dc22c8d0289379c8d8830cae06bb93d8f990194d0de5efb3b5ae7ba6"
 dependencies = [
  "document-features",
-]
-
-[[package]]
-name = "embassy-time-queue-utils"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80e2ee86063bd028a420a5fb5898c18c87a8898026da1d4c852af2c443d0a454"
-dependencies = [
- "embassy-executor-timer-queue",
- "heapless 0.8.0",
 ]
 
 [[package]]
@@ -1398,15 +1382,13 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-rs"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "atomic_once_cell",
  "atomic_refcell",
  "cortex-m",
  "critical-section",
  "diatomic-waker",
- "embassy-time-driver",
- "embassy-time-queue-utils",
  "heapless 0.9.1",
  "log",
  "pin-init",
@@ -1419,7 +1401,7 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-sys"
-version = "0.1.10"
+version = "0.1.11"
 dependencies = [
  "bindgen",
  "build_cfg",
@@ -1430,7 +1412,9 @@ dependencies = [
 
 [[package]]
 name = "ra6m3-fsp-pac"
-version = "0.1.10"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "62b47348ae1c724b22392adf24b05ca7c2bb70330d464e3d28eaedcb4608a182"
 dependencies = [
  "cortex-m",
  "critical-section",

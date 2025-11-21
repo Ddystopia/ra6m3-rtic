@@ -145,8 +145,10 @@ mod app {
 
     #[shared]
     pub struct Shared {
+        // Safety: That section is provided the the linker script and is valid for this purpose.
         #[unsafe(link_section = ".noinit")]
         pub net: network::Net,
+        // Safety: That section is provided the the linker script and is valid for this purpose.
         #[unsafe(link_section = ".noinit")]
         pub device: net_device::Dev,
     }
