@@ -134,14 +134,17 @@ pub fn create_dev(
     ra_fsp_rs::smoltcp::ether::Dev::new(eth, caps)
 }
 
-#[allow(dead_code)]
+/*
 pub fn eth0_mac_generate() -> [u8; 6] {
     use sha2::{Digest, Sha256};
 
     let cpuid = cpuid_get();
 
     let mut hasher = Sha256::new();
-    hasher.update(unsafe { cpuid.align_to() }.1);
+    hasher.update(&cpuid[0].to_le_bytes());
+    hasher.update(&cpuid[1].to_le_bytes());
+    hasher.update(&cpuid[2].to_le_bytes());
+    hasher.update(&cpuid[3].to_le_bytes());
     let cpuid_hash = hasher.finalize();
 
     let mut eth0_mac: [u8; 6] = cpuid_hash[..6].try_into().unwrap();
@@ -152,26 +155,4 @@ pub fn eth0_mac_generate() -> [u8; 6] {
 
     eth0_mac
 }
-
-pub fn cpuid_get() -> [u32; 4] {
-    // maybe cortex_m::peripheral::Peripherals::steal().CPUID.???
-
-    // see RA6M3 group reference manual 55.3.4
-
-    // The FMIFRT is a read-only register that stores a base address
-    // of the Unique ID register, Part Numbering register and MCU Version register.
-    const FMIFRT: *const u32 = 0x407FB19C as *const u32;
-
-    let base = unsafe { FMIFRT.read_volatile() };
-
-    let uidr: *const u32 = (base + 0x14) as *const u32;
-    // let pnr: *const u32 = (base + 0x24) as *const u32;
-    // let mcuver: *const u32 = (base + 0x44) as *const u32;
-
-    let mut cpuid = [0u32; 4];
-    for i in 0..4 {
-        cpuid[i] = unsafe { *uidr.offset(i as isize) };
-    }
-
-    cpuid
-}
+*/
