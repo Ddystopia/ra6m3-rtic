@@ -215,15 +215,15 @@ mod app {
         let mut next = Mono::now();
         let mut i: usize = 0;
 
-        port1.pcntr1().write(|w| w.pdr()._1().podr()._1());
+        port1.pcntr3().write(|w| w.posr()._1());
 
         loop {
             let phase = i % 8;
 
             if phase == 0 || phase == 2 {
-                port4.pcntr1().write(|w| w.pdr()._1().podr()._1());
+                port4.pcntr3().write(|w| w.posr()._1());
             } else {
-                port4.pcntr1().write(|w| w.pdr()._1().podr()._0());
+                port4.pcntr3().write(|w| w.porr()._1());
             }
 
             i = i.wrapping_add(1);
