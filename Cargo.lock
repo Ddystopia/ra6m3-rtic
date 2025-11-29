@@ -1394,7 +1394,6 @@ dependencies = [
  "pin-init",
  "ra-fsp-sys",
  "ra6m3-fsp-pac",
- "rtic-monotonics",
  "smoltcp",
  "static_cell",
 ]

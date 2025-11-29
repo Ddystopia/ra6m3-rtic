@@ -1,0 +1,9 @@
+#ifndef R_GPT_CFG_H__
+#define R_GPT_CFG_H__
+
+#define GPT_CFG_PARAM_CHECKING_ENABLE   (BSP_CFG_PARAM_CHECKING_ENABLE)
+#define GPT_CFG_OUTPUT_SUPPORT_ENABLE   1
+#define GPT_CFG_WRITE_PROTECT_ENABLE    0 // ???
+#define GPT_CFG_GPTCLK_BYPASS           0 // ???
+
+#endif /* R_GPT_CFG_H__ */

@@ -1,6 +1,5 @@
 #![no_main]
 #![no_std]
-
 #![feature(never_type)]
 #![feature(try_blocks)]
 #![feature(type_alias_impl_trait)]
@@ -27,7 +26,6 @@ mod io_ports;
 mod log_ra6m3_setup;
 mod net_ra6m3;
 // mod rand;
-// mod gpt;
 
 mod log {
     #![allow(unused_imports)]
@@ -44,6 +42,8 @@ mod http;
 mod mqtt;
 mod network;
 mod poll_share;
+#[cfg(feature = "real-time-tests")]
+mod real_time_test;
 mod socket;
 mod socket_storage;
 mod util;
@@ -70,6 +70,7 @@ type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
 ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT5_COUNTER_OVERFLOW => pac::Interrupt::IEL10,
 }
 
 systick_monotonic!(Mono, CLOCK_HZ);
@@ -91,6 +92,10 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
+    #[cfg(feature = "real-time-tests")]
+    let gpt5 =
+        real_time_test::setup_gpt5(ctx.device.GPT32E5, ctx.device.PORT1, pac::Interrupt::IEL10);
+
     let (net, device, sockets) = network::init_network(
         ctx.cs,
         &mut ctx.core.NVIC,
@@ -101,34 +106,25 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     let [mqtt_socket_handle, http_socket_handle] = sockets;
 
-    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).unwrap();
+    app::blinky::spawn(/*ctx.device.PORT1,*/ ctx.device.PORT4).unwrap();
     app::http_task::spawn(http_socket_handle).unwrap();
     app::mqtt_task::spawn(mqtt_socket_handle).unwrap();
     app::network_link_poll::spawn().unwrap();
     app::network_poller::spawn().unwrap();
-    app::waiter::spawn().unwrap();
+
+    app::hight_prioriority_task::spawn(ctx.device.PORT9).unwrap();
 
     info!("Init done");
 
-    (app::Shared { net, device }, app::Local {})
-}
-
-async fn waiter(_: app::waiter::Context<'_>) -> ! {
-    let mut next = Mono::now();
-
-    info!("Waiter task: 1 at {}", Mono::now().ticks());
-
-    next += 1000.millis();
-    Mono::delay_until(next).await;
-
-    info!("Waiter task: 2 at {}", Mono::now().ticks());
-
-    next += 1000.millis();
-    Mono::delay_until(next).await;
-
-    info!("Waiter task: 3 at {}", Mono::now().ticks());
-
-    core::future::pending().await
+    (
+        app::Shared {
+            net,
+            device,
+            #[cfg(feature = "real-time-tests")]
+            gpt5,
+        },
+        app::Local {},
+    )
 }
 
 #[rtic::app(
@@ -151,6 +147,10 @@ mod app {
         // Safety: That section is provided the the linker script and is valid for this purpose.
         #[unsafe(link_section = ".noinit")]
         pub device: net_device::Dev,
+        // #[cfg(feature = "real-time-tests")]
+        pub gpt5: core::pin::Pin<
+            &'static mut ra_fsp_rs::gpt::Gpt<'static, ra_fsp_rs::state_markers::Opened>,
+        >,
     }
 
     #[local]
@@ -164,9 +164,12 @@ mod app {
         super::init(ctx)
     }
 
-    #[task(priority = 3)]
-    async fn waiter(ctx: waiter::Context<'_>) -> ! {
-        super::waiter(ctx).await
+    #[task(priority = 4)]
+    async fn hight_prioriority_task(
+        ctx: hight_prioriority_task::Context<'_>,
+        port9: pac::PORT9,
+    ) -> ! {
+        super::real_time_test::high_priority_task(ctx, port9).await
     }
 
     #[task(priority = 1, shared = [net], local = [storage: mqtt::Storage = mqtt::Storage::new()])]
@@ -209,13 +212,13 @@ mod app {
     }
 
     #[task(priority = 1)]
-    async fn blinky(_ctx: blinky::Context, port1: pac::PORT1, port4: pac::PORT4) {
+    async fn blinky(_ctx: blinky::Context, /*port1: pac::PORT1, */ port4: pac::PORT4) {
         const PERIOD_MS: Ticks = 100;
 
         let mut next = Mono::now();
         let mut i: usize = 0;
 
-        port1.pcntr3().write(|w| w.posr()._1());
+        // port1.pcntr3().write(|w| w.posr()._1());
 
         loop {
             let phase = i % 8;
@@ -230,6 +233,25 @@ mod app {
             next += PERIOD_MS.millis();
             Mono::delay_until(next).await;
         }
+    }
+
+    #[task(binds = IEL10, priority = 3, shared = [gpt5])]
+    fn gpt5_overflow_isr(mut ctx: gpt5_overflow_isr::Context) {
+        // use ra_fsp_rs::ra_fsp_sys::generated::e_timer_event;
+        // 2.1 if commented out, 2.2 if not commented out
+        // unsafe {
+        //     ra_fsp_rs::sys::generated::R_BSP_IrqStatusClear(10);
+        // }
+        // <real_time_test::Gpt5Context as ra_fsp_rs::Callback<e_timer_event>>::call(
+        //     &real_time_test::Gpt5Context(),
+        //     e_timer_event::TIMER_EVENT_CYCLE_END,
+        // )
+        // ra_fsp_rs::gpt::gpt_counter_overflow_isr();
+
+        ctx.shared.gpt5.lock(|gpt5| {
+            use ra_fsp_rs::gpt::IsrPrototype;
+            gpt5.as_mut().handle_isr(IsrPrototype::Overflow)
+        })
     }
 
     #[idle]

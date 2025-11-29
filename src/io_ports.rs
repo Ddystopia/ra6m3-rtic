@@ -318,7 +318,7 @@ pub static BSP_PIN_CFG: IoPortConfig = IoPortConfig::new(&[
     },
     ioport_pin_cfg_t {
         pin: BSP_IO_PORT_06_PIN_10,
-        pin_cfg: IOPORT_CFG_DRIVE_HIGH | IOPORT_CFG_PERIPHERAL_PIN | IOPORT_PERIPHERAL_LCD_GRAPHICS,
+        pin_cfg: IOPORT_CFG_PERIPHERAL_PIN | IOPORT_PERIPHERAL_GPT1,
     },
     ioport_pin_cfg_t {
         pin: BSP_IO_PORT_06_PIN_11,
@@ -390,6 +390,10 @@ pub static BSP_PIN_CFG: IoPortConfig = IoPortConfig::new(&[
     },
     ioport_pin_cfg_t {
         pin: BSP_IO_PORT_08_PIN_05,
+        pin_cfg: IOPORT_CFG_PORT_DIRECTION_OUTPUT | IOPORT_CFG_PORT_OUTPUT_LOW,
+    },
+    ioport_pin_cfg_t {
+        pin: BSP_IO_PORT_09_PIN_00,
         pin_cfg: IOPORT_CFG_PORT_DIRECTION_OUTPUT | IOPORT_CFG_PORT_OUTPUT_LOW,
     },
     ioport_pin_cfg_t {

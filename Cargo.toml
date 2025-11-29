@@ -35,7 +35,7 @@ rand_core = "0.6.4"
 
 [dependencies.ra-fsp-rs]
 version = "0.1.7"
-features = ["device", "ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "mod-r_gpt", "smoltcp-ether", "rtic-monotonics-gpt"]
+features = ["device", "ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "smoltcp-ether"]
 optional = true 
 
 [patch.crates-io]
@@ -57,11 +57,12 @@ opt-level = 0
 
 [features]
 # default = ["ra6m3", "log", "tls"]
-default = ["ra6m3", "log"]
+default = ["ra6m3", "log", "real-time-tests"]
 tls = ["dep:embedded-tls"]
 ra6m3 = ["dep:ra-fsp-rs"]
 defmt = ["dep:defmt", "heapless/defmt-03", "picoserve/defmt", "embedded-tls/defmt", "smoltcp/defmt"]
 log = ["dep:log", "dep:rtt-target", "smoltcp/log"]
+real-time-tests = ["ra-fsp-rs/mod-r_gpt"]
 
 [dependencies.smoltcp]
 version = "0.12.0"
