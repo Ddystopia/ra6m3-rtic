@@ -135,8 +135,6 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 mod app {
     use core::mem::MaybeUninit;
 
-    use ra_fsp_rs::ether::InterruptCause;
-
     use super::*;
 
     #[shared]
@@ -164,7 +162,7 @@ mod app {
         super::init(ctx)
     }
 
-    #[task(priority = 4)]
+    #[task(priority = 3)]
     async fn hight_prioriority_task(
         ctx: hight_prioriority_task::Context<'_>,
         port9: pac::PORT9,
@@ -183,14 +181,9 @@ mod app {
     }
 
     // todo: is there a reason to give this task higher priority?
-    #[task(binds = IEL0, priority = 2)]
-    fn ethernet_isr(_ctx: ethernet_isr::Context) {
-        net_device::ethernet_isr_handler();
-    }
-
-    #[task(priority = 3, shared = [device])] // priority of `ethernet_isr` + 1
-    async fn populate_buffers(mut ctx: populate_buffers::Context, cause: InterruptCause) {
-        ctx.shared.device.lock(|d| d.populate_buffers(cause));
+    #[task(binds = IEL0, priority = 2, shared = [device])]
+    fn ethernet_isr(mut ctx: ethernet_isr::Context) {
+        ctx.shared.device.lock(|d| d.eth().handle_isr());
     }
 
     #[task(priority = 2, shared = [net, device])]

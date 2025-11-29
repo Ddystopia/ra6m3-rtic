@@ -49,20 +49,20 @@ static RX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_RX_DESC]> =
 
 struct NetCallback;
 
-impl ra_fsp_rs::Callback<ether::InterruptCause> for NetCallback {
-    fn call(_context: &Self, cause: ether::InterruptCause) {
+impl ra_fsp_rs::Callback<ether::InterruptCause, Ether<'static, MTU, Opened>> for NetCallback {
+    fn call_with_block(
+        _context: &Self,
+        block: core::pin::Pin<&mut Ether<'static, MTU, Opened>>,
+        cause: ether::InterruptCause,
+    ) {
         let receive = cause.receive;
         let transmits = cause.transmits;
         let went_up = cause.went_up;
 
-        if went_up || transmits {
-            // We need to access `Dev`.
-            crate::app::populate_buffers::spawn(cause).expect(
-                "
-`populate_buffers` should have enough priority to preempt\
-the current task, so we should always be able to spawn it.
-",
-            )
+        if went_up {
+            block.update_rx_buffers(cause);
+        } else if transmits {
+            block.update_tx_buffers(cause);
         }
 
         if receive || transmits || went_up {
@@ -70,8 +70,6 @@ the current task, so we should always be able to spawn it.
         }
     }
 }
-
-pub use ether::ether_eint_isr as ethernet_isr_handler;
 
 pub fn create_dev(
     _cs: CriticalSection<'_>,
