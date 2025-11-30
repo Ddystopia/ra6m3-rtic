@@ -93,8 +93,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
     #[cfg(feature = "real-time-tests")]
-    let gpt5 =
-        real_time_test::setup_gpt5(ctx.device.GPT32E5, ctx.device.PORT1, pac::Interrupt::IEL10);
+    let gpt5 = real_time_test::setup_gpt5(ctx.device.GPT32E5, pac::Interrupt::IEL10);
 
     let (net, device, sockets) = network::init_network(
         ctx.cs,
@@ -106,24 +105,24 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     let [mqtt_socket_handle, http_socket_handle] = sockets;
 
-    app::blinky::spawn(/*ctx.device.PORT1,*/ ctx.device.PORT4).unwrap();
+    app::blinky::spawn(ctx.device.PORT1, ctx.device.PORT4).unwrap();
     app::http_task::spawn(http_socket_handle).unwrap();
     app::mqtt_task::spawn(mqtt_socket_handle).unwrap();
     app::network_link_poll::spawn().unwrap();
     app::network_poller::spawn().unwrap();
 
-    app::hight_prioriority_task::spawn(ctx.device.PORT9).unwrap();
+    // interferes with measurements
+    // #[cfg(feature = "real-time-tests")]
+    // app::hight_prioriority_task::spawn(ctx.device.PORT9).unwrap();
 
     info!("Init done");
 
     (
-        app::Shared {
-            net,
-            device,
+        app::Shared { net, device },
+        app::Local {
             #[cfg(feature = "real-time-tests")]
             gpt5,
         },
-        app::Local {},
     )
 }
 
@@ -145,14 +144,13 @@ mod app {
         // Safety: That section is provided the the linker script and is valid for this purpose.
         #[unsafe(link_section = ".noinit")]
         pub device: net_device::Dev,
-        // #[cfg(feature = "real-time-tests")]
-        pub gpt5: core::pin::Pin<
-            &'static mut ra_fsp_rs::gpt::Gpt<'static, ra_fsp_rs::state_markers::Opened>,
-        >,
     }
 
     #[local]
-    pub struct Local {}
+    pub struct Local {
+        #[cfg(feature = "real-time-tests")]
+        pub gpt5: core::pin::Pin<&'static mut real_time_test::Gpt5>,
+    }
 
     #[init(local = [
         sockets: SocketStorage = SocketStorage::new(),
@@ -205,13 +203,13 @@ mod app {
     }
 
     #[task(priority = 1)]
-    async fn blinky(_ctx: blinky::Context, /*port1: pac::PORT1, */ port4: pac::PORT4) {
+    async fn blinky(_ctx: blinky::Context, port1: pac::PORT1, port4: pac::PORT4) {
         const PERIOD_MS: Ticks = 100;
 
         let mut next = Mono::now();
         let mut i: usize = 0;
 
-        // port1.pcntr3().write(|w| w.posr()._1());
+        port1.pcntr3().write(|w| w.posr()._1());
 
         loop {
             let phase = i % 8;
@@ -228,23 +226,46 @@ mod app {
         }
     }
 
-    #[task(binds = IEL10, priority = 3, shared = [gpt5])]
-    fn gpt5_overflow_isr(mut ctx: gpt5_overflow_isr::Context) {
-        // use ra_fsp_rs::ra_fsp_sys::generated::e_timer_event;
-        // 2.1 if commented out, 2.2 if not commented out
-        // unsafe {
-        //     ra_fsp_rs::sys::generated::R_BSP_IrqStatusClear(10);
-        // }
-        // <real_time_test::Gpt5Context as ra_fsp_rs::Callback<e_timer_event>>::call(
-        //     &real_time_test::Gpt5Context(),
-        //     e_timer_event::TIMER_EVENT_CYCLE_END,
-        // )
-        // ra_fsp_rs::gpt::gpt_counter_overflow_isr();
+    #[task(binds = IEL10, priority = 3, local = [gpt5])]
+    fn gpt5_overflow_isr(ctx: gpt5_overflow_isr::Context) {
+        let mut gpt5 = ctx.local.gpt5.as_mut();
+        // let count = gpt5.regs().gtcnt().read().bits();
+        // gpt5.regs().gtstp().write(|w| w.cstop5()._1());
+        // gpt5.regs().gtstr().write(|w| w.cstrt5()._1());
+    
+        // Generally I measured that
+        // - Calling callback directly:
+        //   49 with inline always, unreachables, count at the start
+        //   64 with no inline alywas
+        //   71 with both call and unreachable
+        // - Thus 17 for a function call, 2-5 for unreachable, check for event optimized out
+        //
+        // - Calling FSP that will call Rust wrapper, modifications in FSP:
+        //    116 with inline and unreachable without many ifs
+        //    123 with check for event
+        //    147 with check for event and their ifs (+ 24)
+        //    192 with check for event and their ifs and R_BSP_IrqStatusClear at the start, with/without inline always
+        //    200 with all above and move count getter after stop
+        // - Thus
+        //    116 ticks was try to minimize FSP overhead, 116 - 49 = 57, maximum possible overhead of Rust wrapper
+        //    Lets assume half of it goes to cuts of FSP and half to Rust wrappers, thus
+        //    Rust Wrappers would eat up 28 ticks
 
-        ctx.shared.gpt5.lock(|gpt5| {
-            use ra_fsp_rs::gpt::IsrPrototype;
-            gpt5.as_mut().handle_isr(IsrPrototype::Overflow)
-        })
+        use ra_fsp_rs::ra_fsp_sys::generated::e_timer_event;
+        <real_time_test::Gpt5Context as ra_fsp_rs::Callback<e_timer_event, _>>::call_with_block(
+            &real_time_test::Gpt5Context(),
+            gpt5.as_mut(),
+            e_timer_event::TIMER_EVENT_CYCLE_END,
+        );
+
+        // use ra_fsp_rs::gpt::IsrPrototype;
+        // gpt5.as_mut().handle_isr(IsrPrototype::Overflow);
+
+        // I moved this R_BSP_IrqStatusClear inside FSP after the callback and latency
+        // reduced by 41 cycles (120MHz)
+        ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL10);
+
+        // crate::info!("             Count (0): {count} ]\n");
     }
 
     #[idle]
@@ -253,4 +274,29 @@ mod app {
             rtic::export::wfi();
         }
     }
+}
+
+#[cfg(false)]
+#[unsafe(no_mangle)]
+extern "C" fn IEL10() {
+    use ra_fsp_rs::sys::generated as sys;
+
+    unsafe extern "C" {
+        pub safe static gp_renesas_isr_context: [*mut core::ffi::c_void; 96];
+    }
+
+    unsafe {
+        let gpt5 = pac::GPT32E5::steal();
+        gpt5.gtstp().write(|w| w.cstop5()._1());
+        let count = gpt5.gtcnt().read().bits();
+        let i = sys::R_GPT_CompareMatchSet(
+            gp_renesas_isr_context[10],
+            count,
+            sys::e_timer_compare_match::TIMER_COMPARE_MATCH_B,
+        );
+        assert_eq!(i, ra_fsp_rs::e_fsp_err::FSP_SUCCESS);
+        gpt5.gtstr().write(|w| w.cstrt5()._1());
+    }
+
+    ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL10);
 }

@@ -1,7 +1,7 @@
 use core::pin::Pin;
 
 use ra_fsp_rs::{
-    gpt::{self, GptRegister},
+    gpt::{self},
     pac::{self, GPT32E5, Interrupt},
     pin_init::InPlaceWrite,
     ra_fsp_sys as sys,
@@ -35,108 +35,121 @@ Measurement sessions for 1.2 would be collected to `session-1-2-datetime.log` fi
 
 */
 
-static GPT: StaticCell<gpt::Gpt<Opened>> = StaticCell::new();
+pub type Gpt5 = gpt::Gpt<'static, gpt::Channel5, Opened>;
+
+static GPT: StaticCell<Gpt5> = StaticCell::new();
 static CALLBACK: StaticCell<Gpt5Context> = StaticCell::new();
 
 // 2. it during callback or before calling into fsp isr and compare differences
-pub struct Gpt5Context(pac::PORT1);
-impl ra_fsp_rs::Callback<sys::generated::timer_event_t, gpt::Gpt<'_, Opened>> for Gpt5Context {
+pub struct Gpt5Context();
+impl ra_fsp_rs::Callback<sys::generated::timer_event_t, Gpt5> for Gpt5Context {
+    #[inline(always)]
     fn call_with_block(
         _context: &Self,
-        block: Pin<&mut gpt::Gpt<'_, Opened>>,
-        event: sys::generated::timer_event_t,
+        mut block: Pin<&mut Gpt5>,
+        _event: sys::generated::timer_event_t,
     ) {
-        if event == sys::generated::e_timer_event::TIMER_EVENT_CYCLE_END {
-            let GptRegister::GPT32E5(gpt5) = block.regs_full() else {
-                unreachable!()
-            };
-            gpt5.gtstp().write(|w| w.cstop5()._1());
-            // gpt5.gtclr().write(|w| w.cclr5()._1());
-            for _ in 0..10 {
-                cortex_m::asm::nop();
-            }
+        // Idea is: when we stopped, output is low, yeah.
+        // But when we restart output will be high again.
+        // Set compare match b exactly at now and it will reset the value on restart
 
-            gpt5.gtstr().write(|w| w.cstrt5()._1());
-        }
+        let gpt5 = block.as_mut();
+        // let count = gpt5.gtcnt().read().bits();
+
+        /*
+
+        When compare match in cfg is large enough, If I     stop-start then it remains low,
+                                                   If I not stop-start then it periodic
+
+        When compare match in cfg is not large enough, If then it remains low no matter stop-start
+
+        */
+
+        gpt5.regs().gtstp().write(|w| w.cstop5()._1());
+
+        // let count = gpt5.gtcnt().read().bits();
+        // log::info!("[ Count (1): {count}");
+
+        // gpt5.regs().gtccrb().write(|w| unsafe { w.bits(count - 1) });
+
+        // safe version of the above
+        // gpt5
+        //     .as_mut()
+        //     .compare_match_set(
+        //         count,
+        //         sys::generated::e_timer_compare_match::TIMER_COMPARE_MATCH_B,
+        //     )
+        //     .unwrap();
+
+        gpt5.regs().gtstr().write(|w| w.cstrt5()._1());
     }
 }
-// impl ra_fsp_rs::Callback<sys::generated::timer_event_t> for Gpt5Context {
-//     fn call(_context: &Self, event: sys::generated::timer_event_t) {
-//         if event == sys::generated::e_timer_event::TIMER_EVENT_CYCLE_END {
-//             for _ in 0..10 {
-//                 cortex_m::asm::nop();
-//             }
-//         }
-//     }
-// }
 
-pub fn setup_gpt5(
-    gpt: GPT32E5,
-    port1: pac::PORT1,
-    cycle_end: Interrupt,
-) -> Pin<&'static mut gpt::Gpt<'static, Opened>> {
-    // gtiob 01000
-    // obdflt 0 -- set down when stopped
-    // obhld 0 -- set down when stopped
-    // obe 1
-    // obdf  00
-    // nfben 0
-    // nfcsb 00
-
-    /*
-    let gtior_inner = unsafe {
-        let mut gtior_inner = sys::generated::s_gpt_gtior_setting__bindgen_ty_1::default();
-        gtior_inner.gtior_b.set_gtiob(0b01000);
-        gtior_inner.gtior_b.set_obdflt(0);
-        gtior_inner.gtior_b.set_obhld(1);
-        gtior_inner.gtior_b.set_obe(1);
-        gtior_inner.gtior_b.set_obdf(0);
-        gtior_inner.gtior_b.set_nfben(0);
-        gtior_inner
+pub fn setup_gpt5(gpt: GPT32E5, cycle_end: Interrupt) -> Pin<&'static mut Gpt5> {
+    use sys::generated::{
+        s_gpt_gtior_setting__bindgen_ty_1 as GtiorInner,
+        s_gpt_gtior_setting__bindgen_ty_1__bindgen_ty_1 as GtiorB,
     };
 
+    let gtior_inner = GtiorInner {
+        gtior_b: {
+            let mut gtior_b = GtiorB::default();
+            gtior_b.set_gtiob(0b01001);
+            gtior_b.set_obdflt(0);
+            gtior_b.set_obhld(0);
+            gtior_b.set_obe(1);
+            gtior_b.set_obdf(0);
+            gtior_b.set_nfben(0);
+            gtior_b
+        },
+    };
+
+    // wait, how it knows when to set the output to high and when to low?
+    // i wanna on overflow
     let gpt5_cfg = ra_fsp_rs::timer_api::TimerConf {
         channel: 5,
         mode: sys::generated::e_timer_mode::TIMER_MODE_PERIODIC,
-        period_counts: 187500, // 100ms
-        source_div: sys::generated::e_timer_source_div::TIMER_SOURCE_DIV_64,
-        cycle_end,
+        // mode: sys::generated::e_timer_mode::TIMER_MODE_PWM,
+        period_counts: 64 * 18750, // 10ms
+        source_div: sys::generated::e_timer_source_div::TIMER_SOURCE_DIV_1,
+        cycle_end: Some(cycle_end),
         duty_cycle_counts: 0,
         extend: gpt::GptExtendedConfig {
             gtiocb: sys::generated::gpt_output_pin_t {
                 output_enabled: true,
                 stop_level: sys::generated::gpt_pin_level_t::GPT_PIN_LEVEL_LOW,
             },
+            compare_match_value: [0, 2000],
+            compare_match_status: 0b10, // enable compare match b
             gtior_setting: sys::generated::gpt_gtior_setting_t {
                 __bindgen_anon_1: gtior_inner,
             },
             ..Default::default()
         },
     };
-    */
-    let gpt5_cfg = ra_fsp_rs::timer_api::TimerConf {
-        channel: 5,
-        mode: sys::generated::e_timer_mode::TIMER_MODE_PWM,
-        period_counts: 1875, // 1ms
-        source_div: sys::generated::e_timer_source_div::TIMER_SOURCE_DIV_64,
-        cycle_end: Some(cycle_end),
-        duty_cycle_counts: 1875 / 2,
-        extend: gpt::GptExtendedConfig {
-            gtiocb: sys::generated::gpt_output_pin_t {
-                output_enabled: true,
-                stop_level: sys::generated::gpt_pin_level_t::GPT_PIN_LEVEL_LOW,
-            },
-            ..Default::default()
-        },
-    };
+    // let gpt5_cfg = ra_fsp_rs::timer_api::TimerConf {
+    //     channel: 5,
+    //     mode: sys::generated::e_timer_mode::TIMER_MODE_PWM,
+    //     period_counts: 1875, // 1ms
+    //     source_div: sys::generated::e_timer_source_div::TIMER_SOURCE_DIV_64,
+    //     cycle_end: Some(cycle_end),
+    //     duty_cycle_counts: 1875 / 2,
+    //     extend: gpt::GptExtendedConfig {
+    //         gtiocb: sys::generated::gpt_output_pin_t {
+    //             output_enabled: true,
+    //             stop_level: sys::generated::gpt_pin_level_t::GPT_PIN_LEVEL_LOW,
+    //         },
+    //         ..Default::default()
+    //     },
+    // };
 
     let mut gpt5 = GPT
         .uninit()
-        .write_pin_init(gpt::Gpt::new_open(GptRegister::GPT32E5(gpt), gpt5_cfg))
+        .write_pin_init(Gpt5::new_open(gpt, gpt5_cfg))
         .expect("Error creating GPT5");
 
     gpt5.as_mut()
-        .callback_set(CALLBACK.init(Gpt5Context(port1)))
+        .callback_set(CALLBACK.init(Gpt5Context()))
         .expect("Failed to set GP5 callback");
 
     gpt5.as_mut().start().expect("Failed to start GPT5");
@@ -146,7 +159,7 @@ pub fn setup_gpt5(
 
 pub async fn high_priority_task(
     _ctx: crate::app::hight_prioriority_task::Context<'_>,
-    port9: ra_fsp_rs::pac::PORT9,
+    port9: pac::PORT9,
 ) -> ! {
     port9.pcntr3().write(|w| w.posr()._0());
 
