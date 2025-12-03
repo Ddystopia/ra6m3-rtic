@@ -148,7 +148,6 @@ async fn handle_tls_session(
 
     loop {
         match dequeue(rx, waiting_for_message).await {
-            // may happen when broker sends rst to us
             AdapterMessageIn::Connect(_) => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Read(buffer) => {
                 let result = match {
@@ -210,8 +209,7 @@ async fn adapter_task(
 
     loop {
         match dequeue(rx, waiting_for_message).await {
-            // may happen when broker sends rst to us
-            AdapterMessageIn::Connect(_) if connected => unreachable!("Cannot connect twice"),
+            // AdapterMessageIn::Connect(_) if connected => unreachable!("Cannot connect twice"),
             AdapterMessageIn::Connect(socket_addr) => {
                 tx.set(Some(AdapterMessageOut::Connect(Poll::Pending)));
 
@@ -227,6 +225,11 @@ async fn adapter_task(
                 let port = MQTT_CLIENT_PORT + port_shift.0 as u16;
 
                 port_shift += 1;
+
+                if connected {
+                    // may happen when broker sends rst to us. In that case no need to handshake close
+                    tcp_socket.abort();
+                }
 
                 let result = tcp_socket
                     .connect(socket_addr, port)
