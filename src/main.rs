@@ -71,6 +71,7 @@ type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
     ra_fsp_rs::e_elc_event::ELC_EVENT_GPT5_COUNTER_OVERFLOW => pac::Interrupt::IEL10,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT7_COUNTER_OVERFLOW => pac::Interrupt::IEL12,
 }
 
 systick_monotonic!(Mono, CLOCK_HZ);
@@ -92,8 +93,17 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
-    #[cfg(feature = "real-time-tests")]
-    let gpt5 = real_time_test::setup_gpt5(ctx.device.GPT32E5, pac::Interrupt::IEL10);
+    unsafe {
+        ctx.core.NVIC.set_priority(
+            pac::Interrupt::IEL12,
+            ra_fsp_rs::utils::fsp_prio_to_hw(1, pac::NVIC_PRIO_BITS),
+        );
+    }
+
+    let mut gpt5 = real_time_test::setup_gpt5(ctx.device.GPT32E5, pac::Interrupt::IEL10);
+    let mut gpt7 = real_time_test::setup_gpt7(ctx.device.GPT32E7, pac::Interrupt::IEL12);
+
+    app::pricise_clear::spawn().unwrap();
 
     let (net, device, sockets) = network::init_network(
         ctx.cs,
@@ -112,18 +122,11 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     app::network_poller::spawn().unwrap();
 
     // interferes with measurements
-    // #[cfg(feature = "real-time-tests")]
-    // app::hight_prioriority_task::spawn(ctx.device.PORT9).unwrap();
+    app::hight_prioriority_task::spawn(ctx.device.PORT9).unwrap();
 
     info!("Init done");
 
-    (
-        app::Shared { net, device },
-        app::Local {
-            #[cfg(feature = "real-time-tests")]
-            gpt5,
-        },
-    )
+    (app::Shared { net, device }, app::Local { gpt5, gpt7 })
 }
 
 #[rtic::app(
@@ -148,8 +151,8 @@ mod app {
 
     #[local]
     pub struct Local {
-        #[cfg(feature = "real-time-tests")]
         pub gpt5: core::pin::Pin<&'static mut real_time_test::Gpt5>,
+        pub gpt7: core::pin::Pin<&'static mut real_time_test::Gpt7>,
     }
 
     #[init(local = [
@@ -158,6 +161,16 @@ mod app {
     ])]
     fn init(ctx: init::Context) -> (Shared, Local) {
         super::init(ctx)
+    }
+
+    #[task(priority = 3)]
+    async fn pricise_clear(_ctx: pricise_clear::Context<'_>) {
+        let gpt5 = unsafe { pac::GPT32E5::steal() };
+        gpt5.gtclr().write(|w| w.cclr5()._1());
+        for _ in 0..20 {
+            cortex_m::asm::nop();
+        }
+        gpt5.gtclr().write(|w| w.cclr7()._1());
     }
 
     #[task(priority = 3)]
@@ -209,7 +222,7 @@ mod app {
         let mut next = Mono::now();
         let mut i: usize = 0;
 
-        port1.pcntr3().write(|w| w.posr()._1());
+        // port1.pcntr3().write(|w| w.posr()._1());
 
         loop {
             let phase = i % 8;
@@ -227,12 +240,41 @@ mod app {
     }
 
     #[task(binds = IEL10, priority = 3, local = [gpt5])]
+    #[unsafe(link_section = ".code_in_ram")]
     fn gpt5_overflow_isr(ctx: gpt5_overflow_isr::Context) {
-        let mut gpt5 = ctx.local.gpt5.as_mut();
-        // let count = gpt5.regs().gtcnt().read().bits();
-        // gpt5.regs().gtstp().write(|w| w.cstop5()._1());
-        // gpt5.regs().gtstr().write(|w| w.cstrt5()._1());
-    
+        use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
+        let port = unsafe { pac::PORT1::steal() };
+        port.pcntr3().write(|w| w.posr()._1());
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        cortex_m::asm::nop();
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        port.pcntr3().write(|w| w.porr()._1());
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
+        ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL10);
+        compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
+    /*
+    #[task(binds = IEL10, priority = 3, local = [gpt5])]
+    fn gpt5_overflow_isr(ctx: gpt5_overflow_isr::Context) {
+        use ra_fsp_rs::gpt::IsrPrototype;
+        ctx.local.gpt5.as_mut().handle_isr(IsrPrototype::Overflow);
+
         // Generally I measured that
         // - Calling callback directly:
         //   49 with inline always, unreachables, count at the start
@@ -251,22 +293,17 @@ mod app {
         //    Lets assume half of it goes to cuts of FSP and half to Rust wrappers, thus
         //    Rust Wrappers would eat up 28 ticks
 
-        use ra_fsp_rs::ra_fsp_sys::generated::e_timer_event;
-        <real_time_test::Gpt5Context as ra_fsp_rs::Callback<e_timer_event, _>>::call_with_block(
-            &real_time_test::Gpt5Context(),
-            gpt5.as_mut(),
-            e_timer_event::TIMER_EVENT_CYCLE_END,
-        );
-
-        // use ra_fsp_rs::gpt::IsrPrototype;
-        // gpt5.as_mut().handle_isr(IsrPrototype::Overflow);
+        // use ra_fsp_rs::ra_fsp_sys::generated::e_timer_event;
+        // <real_time_test::Gpt5Context as ra_fsp_rs::Callback<e_timer_event, _>>::call_with_block(
+        //     &real_time_test::Gpt5Context(),
+        //     gpt5.as_mut(),
+        //     e_timer_event::TIMER_EVENT_CYCLE_END,
+        // );
 
         // I moved this R_BSP_IrqStatusClear inside FSP after the callback and latency
         // reduced by 41 cycles (120MHz)
-        ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL10);
-
-        // crate::info!("             Count (0): {count} ]\n");
     }
+    */
 
     #[idle]
     fn idle(_: idle::Context) -> ! {
@@ -276,27 +313,29 @@ mod app {
     }
 }
 
-#[cfg(false)]
 #[unsafe(no_mangle)]
-extern "C" fn IEL10() {
+#[unsafe(link_section = ".code_in_ram")]
+extern "C" fn IEL12() {
+    use core::sync::atomic::{compiler_fence, Ordering::SeqCst};
     use ra_fsp_rs::sys::generated as sys;
 
-    unsafe extern "C" {
-        pub safe static gp_renesas_isr_context: [*mut core::ffi::c_void; 96];
-    }
+    let port = unsafe { pac::PORT9::steal() };
+    port.pcntr3().write(|w| w.posr()._1());
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    port.pcntr3().write(|w| w.porr()._1());
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
 
-    unsafe {
-        let gpt5 = pac::GPT32E5::steal();
-        gpt5.gtstp().write(|w| w.cstop5()._1());
-        let count = gpt5.gtcnt().read().bits();
-        let i = sys::R_GPT_CompareMatchSet(
-            gp_renesas_isr_context[10],
-            count,
-            sys::e_timer_compare_match::TIMER_COMPARE_MATCH_B,
-        );
-        assert_eq!(i, ra_fsp_rs::e_fsp_err::FSP_SUCCESS);
-        gpt5.gtstr().write(|w| w.cstrt5()._1());
-    }
-
-    ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL10);
+    ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL12);
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }
