@@ -30,6 +30,7 @@ pub struct Net {
 
 static NETWORK_POLL_REQUEST: AtomicBool = AtomicBool::new(false);
 
+#[inline(always)]
 pub fn request_network_poll() {
     NETWORK_POLL_REQUEST.store(true, Ordering::Release);
     crate::app::network_poller::waker().wake();
@@ -109,6 +110,7 @@ async fn wait_until(next_poll_at: &mut Option<Instant>) {
 }
 
 #[inline(always)]
+#[unsafe(link_section = ".code_in_ram")]
 pub async fn network_poller_task(mut ctx: network_poller::Context<'static>) -> ! {
     let mut next_poll_at = None;
     loop {

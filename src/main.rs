@@ -193,11 +193,13 @@ mod app {
 
     // todo: is there a reason to give this task higher priority?
     #[task(binds = IEL0, priority = 2, shared = [device])]
+    #[unsafe(link_section = ".code_in_ram")]
     fn ethernet_isr(mut ctx: ethernet_isr::Context) {
         ctx.shared.device.lock(|d| d.eth().handle_isr());
     }
 
     #[task(priority = 2, shared = [net, device])]
+    #[unsafe(link_section = ".code_in_ram")]
     async fn network_poller(ctx: network_poller::Context) -> ! {
         network::network_poller_task(ctx).await
     }

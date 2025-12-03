@@ -50,6 +50,7 @@ static RX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_RX_DESC]> =
 struct NetCallback;
 
 impl ra_fsp_rs::Callback<ether::InterruptCause, Ether<'static, MTU, Opened>> for NetCallback {
+    #[unsafe(link_section = ".code_in_ram")]
     fn call_with_block(
         _context: &Self,
         block: core::pin::Pin<&mut Ether<'static, MTU, Opened>>,
