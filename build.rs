@@ -4,7 +4,6 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let memory_x = out_dir.join("memory.x");
 
-    println!("cargo:rerun-if-changed=lm3s6965_memory.x");
     println!("cargo:rerun-if-changed=ra6m3_memory.x");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rustc-link-search={}", out_dir.display());
