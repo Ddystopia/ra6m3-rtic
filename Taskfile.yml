@@ -8,14 +8,6 @@ tasks:
     cmds:
       - cargo doc
 
-  build-debug:
-    cmds:
-      - cargo build --no-default-features -Fqemu,defmt
-
-  build-release:
-    cmds:
-      - cargo build --release --no-default-features -Fqemu,defmt
-
   start-mqtt:
     cmds:
       - rumqttd -c rumqttd.toml --quiet
@@ -52,42 +44,3 @@ tasks:
            sudo ip -6 addr add {{.GATEWAY_IP_V6}}/64 dev {{.DEV}} ;
            sudo ip -6 route add {{.GATEWAY_IP_V6}}/64 dev {{.DEV}} ;
 
-  run-debug-qemu:
-    deps: [build-debug]
-    cmds:
-      - task: run-qemu
-        vars: { PROFILE: 'debug' }
-
-  run-release-qemu:
-    deps: [build-release]
-    cmds:
-      - task: run-qemu
-        vars: { PROFILE: 'release' }
-
-  run-qemu:
-    internal: true
-    deps: [build-debug]
-    vars:
-      PROFILE: '{{ default "-" .PROFILE }}'
-      TARGET:
-        sh: awk -F "=" '/^target/ { gsub(/"/, "", $2); print $2 }' .cargo/config.toml | tr -d " "
-      MAC:
-        sh: awk -F "=" '/^MAC/ { gsub(/"/, "", $2); print $2 }' .cargo/config.toml | tr -d " "
-
-    cmds:
-      - task: setup-tap
-      - cmd: if [ "{{.PROFILE}}" == "-" ]; then echo "PROFILE is not set"; exit 1; fi
-        silent: true
-      # - qemu-system-arm
-      - /home/ddystopia/job/qemu/build/qemu-system-arm
-        -cpu cortex-m3
-        -machine lm3s6965evb
-        -display none
-        -nographic
-        -serial mon:stdio
-        -net nic,macaddr={{.MAC}}
-        -net tap,ifname=tap0,script=no,downscript=no
-        -semihosting-config enable=on,target=native
-        -kernel target/{{.TARGET}}/{{.PROFILE}}/project
-        -gdb tcp::1234
-        | defmt-print -v -e target/{{.TARGET}}/{{.PROFILE}}/project
