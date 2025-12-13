@@ -83,7 +83,7 @@ pub fn make_app() -> picoserve::Router<AppRouter, AppState> {
 </head>
 <body>
     <h1>Welcome to RA6M3 Picoserve</h1>
-    <p>This is a placeholder page.</p>
+    <p>This is a simple static page page.</p>
 </body>
 </html>
 "#;

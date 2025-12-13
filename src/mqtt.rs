@@ -205,7 +205,11 @@ fn on_message() -> OnMessageRtic {
         let msg = core::str::from_utf8(bytes).unwrap();
         info!("Received message on topic '{}': {}", topic, msg);
 
-        let publication = Publication::new("/rtic_mqtt/hello_world_response", "Hello from RTIC");
+        let mut string = heapless::String::<512>::new();
+        _ = string.push_str("Echoing back: ");
+        _ = string.push_str(&msg[..msg.len().min(string.capacity() - string.len())]);
+
+        let publication = Publication::new("/rtic_mqtt/hello_world_response", string.as_str());
         match client.publish(publication) {
             Ok(()) => Ok(()),
             Err(minimq::PubError::Error(mqtt_error)) => Err(mqtt_error),
@@ -232,6 +236,11 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     );
     let keepalive_interval = 10.minutes();
     let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
+    // Fixme: something bad happens with this keepalive, why it sends fucking SYN after 10 minutes?
+    //        then broker sends FIN to prev connection, us, we freak out and send RST
+    //        and "already connected" error appears. Idk why they can continue communicating as usual,
+    //        probably some state machine hack.
+    //        Like, in wireshark I see pings going on between them, yet minimq sends SYN after 10 mins.
     let conf = conf.keepalive_interval(keepalive_interval.to_secs() as u16);
     let conf = conf.client_id(MQTT_CLIENT_ID).expect("Invalid client id");
     let callback = on_message();

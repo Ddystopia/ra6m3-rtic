@@ -8,7 +8,8 @@ edition = "2024"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
 rtic = { git = "https://github.com/rtic-rs/rtic", features = ["cortex-m", "thumbv7-backend"] }
-rtic-monotonics = { version = "2.1.0", features = ["cortex-m-systick", "systick-64bit"] }
+# rtic-monotonics = { version = "2.1.0", features = ["cortex-m-systick", "systick-64bit"] }
+rtic-monotonics = { version = "2.1.0", features = ["cortex-m-systick"] }
 defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
 log = { version = "0.4.27", features = ["release_max_level_info"], default-features = false, optional = true }
 konst = "0.3.16"

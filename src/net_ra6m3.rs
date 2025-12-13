@@ -37,6 +37,8 @@ static PHY0_CFG: ether_phy::EtherPhyConfig = ether_phy::EtherPhyConfig {
     mii_type: e_ether_phy_mii_type::ETHER_PHY_MII_TYPE_RMII,
 };
 
+// todo: move that stuff to hsram. They are already there, but it should be guaranteed.
+
 static RX_DESCRIPTORS: ConstStaticCell<[Descriptor<MTU>; ETH_N_RX_DESC]> =
     ConstStaticCell::new([const { Descriptor::new() }; _]);
 static TX_DESCRIPTORS: ConstStaticCell<[Descriptor<MTU>; ETH_N_TX_DESC]> =

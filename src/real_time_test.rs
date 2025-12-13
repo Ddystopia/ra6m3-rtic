@@ -1,7 +1,7 @@
 use core::pin::Pin;
 
 use ra_fsp_rs::{
-    gpt::{self},
+    gpt,
     pac::{self, GPT32E5, Interrupt},
     pin_init::InPlaceWrite,
     ra_fsp_sys as sys,
@@ -15,49 +15,34 @@ use crate::Mono;
 
 /*
 
-This modules performs 2 tests:
+GPT5 -> rtic + P600 + IEL10
+GPT7 -> raw + P900 + IEL12
 
-1. Test of a simple periodic loop in a form likely used in production
-  1. One part of the test toggles a P900 pin for oscilloscope to collect extremely accurate measurements
-  2. Second part of the test occures during the "work" of loop body and manually measures jitter
+Generally I measured that
+- Calling callback directly:
+  49 with inline always, unreachables, count at the start
+  64 with no inline alywas
+  71 with both call and unreachable
+- Thus 17 for a function call, 2-5 for unreachable, check for event optimized out
 
-2. Have a GPT timer that will periodically set a pin up, and code will try setting it down as fast as possible.
-  We will do this by making GPT set P100 up and triggering interrupt. Then hardware task will set it back down.
-  1. Will do this from FSP callback
-  2. and the second one will do this before calling FSP ISR
-
-Analysis later will have 3 lists of oscilloscope samples (I don't know how to collect them though, you may advice)
-- A list of consisting of measurement sessions of 1.1 as `session-1-1-datetime.csv` files
-- A list of consisting of measurement sessions of 2.1 as `session-2-1-datetime.csv` files
-- A list of consisting of measurement sessions of 2.2 as `session-2-2-datetime.csv` files
-
-Measurement sessions for 1.2 would be collected to `session-1-2-datetime.log` files.
+- Calling FSP that will call Rust wrapper, modifications in FSP:
+   116 with inline and unreachable without many ifs
+   123 with check for event
+   147 with check for event and their ifs (+ 24)
+   192 with check for event and their ifs and R_BSP_IrqStatusClear at the start, with/without inline always (+ 45)
+   200 with all above and move count getter after stop
+- Thus
+   116 ticks was try to minimize FSP overhead, 116 - 49 = 57, maximum possible overhead of Rust wrapper
+   Lets assume half of it goes to cuts of FSP and half to Rust wrappers, thus
+   Rust Wrappers would eat up 28 ticks
 
 */
 
-pub type Gpt5 = gpt::Gpt<'static, gpt::Channel5, Opened>;
-pub type Gpt6 = gpt::Gpt<'static, gpt::Channel6, Opened>;
-pub type Gpt7 = gpt::Gpt<'static, gpt::Channel7, Opened>;
+pub type Gpt5 = gpt::Gpt<'static, pac::GPT32E5, Opened>;
+pub type Gpt7 = gpt::Gpt<'static, pac::GPT32E7, Opened>;
 
 static GPT5: StaticCell<Gpt5> = StaticCell::new();
-static GPT6: StaticCell<Gpt6> = StaticCell::new();
 static GPT7: StaticCell<Gpt7> = StaticCell::new();
-static CALLBACK: StaticCell<Gpt5Context> = StaticCell::new();
-
-// 2. it during callback or before calling into fsp isr and compare differences
-pub struct Gpt5Context();
-impl ra_fsp_rs::Callback<sys::generated::timer_event_t, Gpt5> for Gpt5Context {
-    #[inline(always)]
-    fn call_with_block(
-        _context: &Self,
-        _block: Pin<&mut Gpt5>,
-        _event: sys::generated::timer_event_t,
-    ) {
-        let port = unsafe { pac::PORT1::steal() };
-        port.pcntr3().write(|w| w.posr()._1());
-        port.pcntr3().write(|w| w.porr()._1());
-    }
-}
 
 pub fn setup_gpt5(gpt: GPT32E5, cycle_end: Interrupt) -> Pin<&'static mut Gpt5> {
     use sys::generated::{
@@ -103,10 +88,6 @@ pub fn setup_gpt5(gpt: GPT32E5, cycle_end: Interrupt) -> Pin<&'static mut Gpt5> 
         .uninit()
         .write_pin_init(Gpt5::new_open(gpt, gpt5_cfg))
         .expect("Error creating GPT5");
-
-    gpt5.as_mut()
-        .callback_set(CALLBACK.init(Gpt5Context()))
-        .expect("Failed to set GP5 callback");
 
     gpt5.as_mut().start().expect("Failed to start GPT5");
 
@@ -172,6 +153,7 @@ const DURATION_US: fugit::Duration<crate::Ticks, 1, 1_000_000> =
         None => panic!(),
     };
 
+#[unsafe(link_section = ".code_in_ram")]
 pub async fn high_priority_task(
     _ctx: crate::app::hight_prioriority_task::Context<'_>,
     port9: pac::PORT9,
@@ -186,4 +168,32 @@ pub async fn high_priority_task(
         port9.pcntr3().write(|w| w.posr()._1());
         port9.pcntr3().write(|w| w.porr()._1());
     }
+}
+
+
+#[unsafe(no_mangle)]
+#[unsafe(link_section = ".code_in_ram")]
+extern "C" fn IEL12() {
+    use core::sync::atomic::{Ordering::SeqCst, compiler_fence};
+    use ra_fsp_rs::sys::generated as sys;
+
+    let port = unsafe { pac::PORT9::steal() };
+    port.pcntr3().write(|w| w.posr()._1());
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    port.pcntr3().write(|w| w.porr()._1());
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
+
+    ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL12);
+    compiler_fence(core::sync::atomic::Ordering::SeqCst);
 }

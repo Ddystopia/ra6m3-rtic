@@ -286,6 +286,8 @@ SECTIONS
         __data_start__ = .;
         . = ALIGN(4);
 
+        KEEP(*(.segger_rtt*))
+
         __Code_In_RAM_Start = .;
 
         KEEP(*(.code_in_ram*))

@@ -1274,9 +1274,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.11.0"
+version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "350e9b48cbc6b0e028b0473b114454c6316e57336ee184ceab6e53f72c178b3e"
+checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
 
 [[package]]
 name = "ppv-lite86"
@@ -1382,7 +1382,7 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-rs"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "atomic_once_cell",
  "atomic_refcell",
@@ -1400,7 +1400,7 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-sys"
-version = "0.1.11"
+version = "0.1.12"
 dependencies = [
  "bindgen",
  "build_cfg",
@@ -1411,9 +1411,9 @@ dependencies = [
 
 [[package]]
 name = "ra6m3-fsp-pac"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "62b47348ae1c724b22392adf24b05ca7c2bb70330d464e3d28eaedcb4608a182"
+checksum = "762c475048fa5db9f777a9ef3a5b41983330307cc776ce9aff73bab62bac5916"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -1494,11 +1494,12 @@ dependencies = [
 
 [[package]]
 name = "rtic-common"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0786b50b81ef9d2a944a000f60405bb28bf30cd45da2d182f3fe636b2321f35c"
+checksum = "67caeecca87cb20e1101eb104b0f05604633b7ab1035cce777417c6fb7c8f9a0"
 dependencies = [
  "critical-section",
+ "portable-atomic",
 ]
 
 [[package]]

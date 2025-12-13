@@ -7,7 +7,7 @@ pub fn init() {
                 name: "Terminal",
             }
         }
-        section_cb: ".code_in_ram.segger_rtt"
+        section_cb: ".segger_rtt"
     };
     rtt_target::set_print_channel(channels.up.0);
     rtt_target::init_logger_with_level(log::LevelFilter::Trace);
