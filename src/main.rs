@@ -15,17 +15,6 @@ todo:
   And the stack we will be overflowing is interrupt stack, then where
     `handle_stack_overflow` gets to run?
 
-How to work with GPT and output pin:
-
-- Choose GPT channel you want.
-- Select interrupt.
-- Find pins that can be used with it. Set that pin as peripheral and GPT0 (for compare match A) or GPT1 (for compare match B).
-- Configure GPT with that channel and configure gtior + compare match stuff.
-- Pass that interrupt to conf and don't forget to put a hardware handler, or it will spin.
-    - Todo: assert in Open that handler isn't a default handler if interrupt is set.
-- If you don't use FSP, dont forget `irq_status_clear(number)` or it will loop in that interrupt.
-    - Todo: my rust impl of `irq_status_clear` has some miscompilation.
-
 */
 
 use ra_fsp_rs::pac;
@@ -53,8 +42,6 @@ mod http;
 mod mqtt;
 mod network;
 mod poll_share;
-#[cfg(feature = "real-time-tests")]
-mod real_time_test;
 mod socket;
 mod socket_storage;
 mod util;
@@ -81,8 +68,6 @@ type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
 ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
-    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT5_COUNTER_OVERFLOW => pac::Interrupt::IEL10,
-    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT7_COUNTER_OVERFLOW => pac::Interrupt::IEL12,
 }
 
 systick_monotonic!(Mono, CLOCK_HZ);
@@ -113,12 +98,6 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
         );
     }
 
-    let gpt5 = real_time_test::setup_gpt5(ctx.device.GPT32E5, pac::Interrupt::IEL10);
-    let port6 = ctx.device.PORT6;
-    let gpt7 = real_time_test::setup_gpt7(ctx.device.GPT32E7, pac::Interrupt::IEL12);
-
-    app::pricise_clear::spawn().unwrap();
-
     let (net, device, sockets) = network::init_network(
         ctx.cs,
         &mut ctx.core.NVIC,
@@ -135,15 +114,9 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     app::network_link_poll::spawn().unwrap();
     app::network_poller::spawn().unwrap();
 
-    // interferes with gpt measurements
-    // app::hight_prioriority_task::spawn(ctx.device.PORT9).unwrap();
-
     info!("Init done");
 
-    (
-        app::Shared { net, device },
-        app::Local { gpt5, port6, gpt7 },
-    )
+    (app::Shared { net, device }, app::Local {})
 }
 
 #[rtic::app(
@@ -167,11 +140,7 @@ mod app {
     }
 
     #[local]
-    pub struct Local {
-        pub gpt5: core::pin::Pin<&'static mut real_time_test::Gpt5>,
-        pub port6: pac::PORT6,
-        pub gpt7: core::pin::Pin<&'static mut real_time_test::Gpt7>,
-    }
+    pub struct Local {}
 
     #[init(local = [
         sockets: SocketStorage = SocketStorage::new(),
@@ -179,24 +148,6 @@ mod app {
     ])]
     fn init(ctx: init::Context) -> (Shared, Local) {
         super::init(ctx)
-    }
-
-    #[task(priority = 3)]
-    async fn pricise_clear(_ctx: pricise_clear::Context<'_>) {
-        let gpt5 = unsafe { pac::GPT32E5::steal() };
-        gpt5.gtclr().write(|w| w.cclr5()._1());
-        for _ in 0..20 {
-            cortex_m::asm::nop();
-        }
-        gpt5.gtclr().write(|w| w.cclr7()._1());
-    }
-
-    #[task(priority = 3)]
-    async fn hight_prioriority_task(
-        ctx: hight_prioriority_task::Context<'_>,
-        port9: pac::PORT9,
-    ) -> ! {
-        super::real_time_test::high_priority_task(ctx, port9).await
     }
 
     #[task(priority = 1, shared = [net], local = [storage: mqtt::Storage = mqtt::Storage::new()])]
@@ -257,35 +208,6 @@ mod app {
             next += PERIOD_MS.millis();
             Mono::delay_until(next).await;
         }
-    }
-
-    #[task(binds = IEL10, priority = 3, local = [gpt5, port6])]
-    #[unsafe(link_section = ".code_in_ram")]
-    fn gpt5_overflow_isr(ctx: gpt5_overflow_isr::Context) {
-        use core::sync::atomic::{Ordering::SeqCst, compiler_fence};
-        ctx.local.port6.pcntr3().write(|w| w.posr()._1());
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        cortex_m::asm::nop();
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        ctx.local.port6.pcntr3().write(|w| w.porr()._1());
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
-        ra_fsp_rs::icu::irq_status_clear(pac::Interrupt::IEL10);
-        compiler_fence(core::sync::atomic::Ordering::SeqCst);
     }
 
     #[idle]

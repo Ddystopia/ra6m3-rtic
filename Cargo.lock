@@ -91,12 +91,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bare-metal"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8fe8f5a8a398345e52358e18ff07cc17a568fbca5c6f73873d3a62056309603"
-
-[[package]]
 name = "base16ct"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -270,7 +264,7 @@ version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ec610d8f49840a5b376c69663b6369e71f4b34484b9b2eb29fb918d92516cb9"
 dependencies = [
- "bare-metal 0.2.5",
+ "bare-metal",
  "bitfield",
  "critical-section",
  "embedded-hal 0.2.7",
@@ -1231,7 +1225,7 @@ dependencies = [
 [[package]]
 name = "pin-init"
 version = "0.0.10"
-source = "git+https://github.com/Ddystopia/pin-init?branch=impl_for_mut_ref#883000be44db8b5d6de7e82b32d1f4844492253c"
+source = "git+https://github.com/Rust-for-Linux/pin-init#470c12283beb358ddc63f1ec6f7456aab2112138"
 dependencies = [
  "paste",
  "pin-init-internal",
@@ -1241,7 +1235,7 @@ dependencies = [
 [[package]]
 name = "pin-init-internal"
 version = "0.0.6"
-source = "git+https://github.com/Ddystopia/pin-init?branch=impl_for_mut_ref#883000be44db8b5d6de7e82b32d1f4844492253c"
+source = "git+https://github.com/Rust-for-Linux/pin-init#470c12283beb358ddc63f1ec6f7456aab2112138"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1341,7 +1335,6 @@ dependencies = [
 name = "project"
 version = "0.1.0"
 dependencies = [
- "bare-metal 1.0.0",
  "cortex-m",
  "cortex-m-semihosting",
  "defmt 0.3.100",
