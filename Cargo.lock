@@ -1223,26 +1223,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pin-init"
-version = "0.0.10"
-source = "git+https://github.com/Rust-for-Linux/pin-init#470c12283beb358ddc63f1ec6f7456aab2112138"
-dependencies = [
- "paste",
- "pin-init-internal",
- "rustc_version 0.4.1",
-]
-
-[[package]]
-name = "pin-init-internal"
-version = "0.0.6"
-source = "git+https://github.com/Rust-for-Linux/pin-init#470c12283beb358ddc63f1ec6f7456aab2112138"
-dependencies = [
- "proc-macro2",
- "quote",
- "rustc_version 0.4.1",
-]
-
-[[package]]
 name = "pin-project-lite"
 version = "0.2.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1253,6 +1233,28 @@ name = "pin-utils"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b870d8c151b6f2fb93e84a13146138f05d02ed11c7e7c54f8826aaaf7c9f184"
+
+[[package]]
+name = "pinned-init"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e82ef52a6d0cd8fb1282340a1c6fb773f64cd28332b03f58d5428e821798153d"
+dependencies = [
+ "paste",
+ "pinned-init-macro",
+ "rustc_version 0.4.1",
+]
+
+[[package]]
+name = "pinned-init-macro"
+version = "0.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d449b713caa03c1db93b217633063bb185412bd24e11564db0f326a890d8dad"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version 0.4.1",
+]
 
 [[package]]
 name = "polyval"
@@ -1268,9 +1270,9 @@ dependencies = [
 
 [[package]]
 name = "portable-atomic"
-version = "1.11.1"
+version = "1.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f84267b20a16ea918e43c6a88433c2d54fa145c92a811b5b047ccbe153674483"
+checksum = "f89776e4d69bb58bc6993e99ffa1d11f228b839984854c7daeb5d37f87cbe950"
 
 [[package]]
 name = "ppv-lite86"
@@ -1351,6 +1353,7 @@ dependencies = [
  "log",
  "minimq",
  "picoserve",
+ "portable-atomic",
  "ra-fsp-rs",
  "rand_chacha",
  "rand_core",
@@ -1375,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-rs"
-version = "0.1.12"
+version = "0.2.0"
 dependencies = [
  "atomic_once_cell",
  "atomic_refcell",
@@ -1384,7 +1387,7 @@ dependencies = [
  "diatomic-waker",
  "heapless 0.9.1",
  "log",
- "pin-init",
+ "pinned-init",
  "ra-fsp-sys",
  "ra6m3-fsp-pac",
  "smoltcp",
@@ -1393,7 +1396,7 @@ dependencies = [
 
 [[package]]
 name = "ra-fsp-sys"
-version = "0.1.12"
+version = "0.2.0"
 dependencies = [
  "bindgen",
  "build_cfg",
@@ -1404,9 +1407,9 @@ dependencies = [
 
 [[package]]
 name = "ra6m3-fsp-pac"
-version = "0.1.12"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "762c475048fa5db9f777a9ef3a5b41983330307cc776ce9aff73bab62bac5916"
+checksum = "6cca0296b7ec0ef5a7203787f18315c7f1d5d5bcb3b2981704d8113560d14a2e"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -1477,6 +1480,7 @@ dependencies = [
 [[package]]
 name = "rtic"
 version = "2.2.0"
+source = "git+https://github.com/rtic-rs/rtic#06904a0efa527223271355001937aeadd50406b2"
 dependencies = [
  "cortex-m",
  "critical-section",
@@ -1504,6 +1508,7 @@ checksum = "d9369355b04d06a3780ec0f51ea2d225624db777acbc60abd8ca4832da5c1a42"
 [[package]]
 name = "rtic-macros"
 version = "2.2.0"
+source = "git+https://github.com/rtic-rs/rtic#06904a0efa527223271355001937aeadd50406b2"
 dependencies = [
  "indexmap",
  "proc-macro-error2",
