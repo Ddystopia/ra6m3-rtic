@@ -49,7 +49,6 @@ mod util;
 use ra_fsp_rs::ioport::IoPort;
 
 use conf::CLOCK_HZ;
-use ra_fsp_rs::pin_init::InPlaceWrite;
 #[allow(unused_imports)]
 use rtic::mutex_prelude::*;
 use rtic_monotonics::systick::prelude::*;
@@ -84,10 +83,13 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
 
     ctx.core.SCB.set_sleepdeep();
 
-    let io_port = IoPort::new(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
-    let Ok(mut io_port) = ctx.local.io_port.write_pin_init(io_port);
-
-    io_port.as_mut().open().expect("Failed to open ioports");
+    let io_port = IoPort::new_open(ctx.device.PORT0, io_ports::BSP_PIN_CFG);
+    let _io_port = ctx
+        .local
+        .io_port
+        .write_pin_init(io_port)
+        .expect("Failed to open ioports")
+        .leak();
 
     Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
@@ -125,7 +127,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
   peripherals = true
 )]
 mod app {
-    use core::mem::MaybeUninit;
+    use ra_fsp_rs::{DriverPlace, state_markers::Opened};
 
     use super::*;
 
@@ -144,7 +146,7 @@ mod app {
 
     #[init(local = [
         sockets: SocketStorage = SocketStorage::new(),
-        io_port: MaybeUninit<IoPort> = MaybeUninit::uninit(),
+        io_port: DriverPlace<IoPort<Opened>> = DriverPlace::new(),
     ])]
     fn init(ctx: init::Context) -> (Shared, Local) {
         super::init(ctx)
@@ -161,13 +163,13 @@ mod app {
     }
 
     // todo: is there a reason to give this task higher priority?
-    #[task(binds = IEL0, priority = 2, shared = [device])]
+    #[task(binds = IEL0, priority = 4, shared = [device])]
     #[unsafe(link_section = ".code_in_ram")]
     fn ethernet_isr(mut ctx: ethernet_isr::Context) {
         ctx.shared.device.lock(|d| d.eth().handle_isr());
     }
 
-    #[task(priority = 2, shared = [net, device])]
+    #[task(priority = 4, shared = [net, device])]
     #[unsafe(link_section = ".code_in_ram")]
     async fn network_poller(ctx: network_poller::Context) -> ! {
         network::network_poller_task(ctx).await
@@ -176,17 +178,17 @@ mod app {
     // fixme: this code was in NetxDuo. But I personally don't like polling
     //        every 10ms. Maybe we can somehow trigger something etc.
     //        I don't even rememeber teh point of that whole thing.
-    #[task(priority = 1, shared = [device])]
+    #[task(priority = 4, shared = [device])]
     async fn network_link_poll(mut ctx: network_link_poll::Context) {
         let mut next = Mono::now();
         loop {
-            next += 10.millis();
+            next += 100.millis();
             Mono::delay_until(next).await;
             ctx.shared.device.lock(|dev| dev.poll_link());
         }
     }
 
-    #[task(priority = 1)]
+    #[task(priority = 2)]
     async fn blinky(_ctx: blinky::Context, port1: pac::PORT1, port4: pac::PORT4) {
         const PERIOD_MS: Ticks = 100;
 

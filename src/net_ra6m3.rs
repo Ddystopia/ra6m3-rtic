@@ -3,10 +3,10 @@ use crate::POLL_NETWORK;
 use crate::pac::Interrupt;
 use cortex_m::peripheral::NVIC;
 use ra_fsp_rs::{
+    DriverPlace,
     ether::{self, Buffer, Buffers, Descriptor, Ether, EtherConfig},
     ether_phy::{self, e_ether_phy_lsi_type, e_ether_phy_mii_type},
     pac,
-    pin_init::InPlaceWrite,
     state_markers::{Closed, Opened},
 };
 use rtic::export::CriticalSection;
@@ -15,13 +15,13 @@ use static_cell::{ConstStaticCell, StaticCell};
 
 pub type Dev = ra_fsp_rs::smoltcp::ether::Dev<MTU>;
 
-const MTU: usize = 1500;
+const MTU: usize = 1504;
 
 pub const ETH_N_TX_DESC: usize = 4;
 pub const ETH_N_RX_DESC: usize = 4;
 
-static ETH0: StaticCell<Ether<MTU, Opened>> = StaticCell::new();
-static PHY0: StaticCell<ether_phy::EtherPhy<Closed>> = StaticCell::new();
+static ETH0: DriverPlace<Ether<MTU, Opened>> = DriverPlace::new();
+static PHY0: DriverPlace<ether_phy::EtherPhy<Closed>> = DriverPlace::new();
 
 // todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
 //       that way, we don't need to have a large buffer for smaller stuff, right? Not sure
@@ -64,8 +64,6 @@ impl ra_fsp_rs::Callback<ether::InterruptCause, Ether<'static, MTU, Opened>> for
 
         if went_up {
             block.update_rx_buffers(cause);
-        } else if transmits {
-            block.update_tx_buffers(cause);
         }
 
         if receive || transmits || went_up {
@@ -80,8 +78,8 @@ pub fn create_dev(
     edmac: pac::EDMAC0,
     etherc: pac::ETHERC0,
 ) -> Dev {
-    let initializer = ether_phy::EtherPhy::new(edmac, PHY0_CFG);
-    let Ok(phy) = PHY0.uninit().write_pin_init(initializer);
+    let initializer = ether_phy::EtherPhy::new_closed(edmac, PHY0_CFG);
+    let Ok(phy) = PHY0.write_pin_init(initializer);
 
     let mut conf = EtherConfig::new(phy)
         .channel(0)
@@ -109,10 +107,9 @@ pub fn create_dev(
 
     let before = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
 
-    let initializer = Ether::<MTU, Opened>::new(etherc, conf);
+    let initializer = Ether::<MTU, Opened>::new_open(etherc, conf);
 
     let mut eth = ETH0
-        .uninit()
         .write_pin_init(initializer)
         .expect("Failed to open ethernet");
 
