@@ -60,8 +60,10 @@ use log_ra6m3_setup as logger_setup;
 use net_ra6m3 as net_device;
 use network::Net;
 
-type Ticks = u32;
-use fugit::ExtU32 as TimeExt;
+// type Ticks = u32;
+// use fugit::ExtU32 as TimeExt;
+type Ticks = u64;
+use fugit::ExtU64 as TimeExt;
 type Instant = fugit::Instant<Ticks, 1, CLOCK_HZ>;
 type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
@@ -116,6 +118,9 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     app::network_link_poll::spawn().unwrap();
     app::network_poller::spawn().unwrap();
 
+    // app::lower::spawn().unwrap();
+    app::higher::spawn().unwrap();
+
     info!("Init done");
 
     (app::Shared { net, device }, app::Local {})
@@ -150,6 +155,29 @@ mod app {
     ])]
     fn init(ctx: init::Context) -> (Shared, Local) {
         super::init(ctx)
+    }
+
+    #[task(priority = 3)]
+    #[unsafe(link_section = ".code_in_ram")]
+    async fn higher(_ctx: higher::Context) -> ! {
+        #[unsafe(no_mangle)]
+        static mut FOO: u64 = 0;
+        loop {
+            let now = Mono::now();
+            unsafe { core::ptr::write_volatile(&raw mut FOO, now.ticks()) }
+            Mono::delay(Duration::micros(300)).await;
+        }
+    }
+    
+    #[task(priority = 1)]
+    #[unsafe(link_section = ".code_in_ram")]
+    async fn lower(_ctx: lower::Context) -> ! {
+        #[unsafe(no_mangle)]
+        static mut FOO2: u64 = 0;
+        loop {
+            let now = Mono::now();
+            unsafe { core::ptr::write_volatile(&raw mut FOO2, now.ticks()) }
+        }
     }
 
     #[task(priority = 1, shared = [net], local = [storage: mqtt::Storage = mqtt::Storage::new()])]
