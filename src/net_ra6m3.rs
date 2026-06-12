@@ -13,14 +13,14 @@ use rtic::export::CriticalSection;
 use smoltcp::phy::{ChecksumCapabilities, DeviceCapabilities, Medium};
 use static_cell::{ConstStaticCell, StaticCell};
 
-pub type Dev = ra_fsp_rs::smoltcp::ether::Dev<MTU>;
+pub type Dev = ra_fsp_rs::smoltcp::ether::Dev;
 
 const MTU: usize = 1504;
 
 pub const ETH_N_TX_DESC: usize = 4;
 pub const ETH_N_RX_DESC: usize = 4;
 
-static ETH0: DriverPlace<Ether<MTU, Opened>> = DriverPlace::new();
+static ETH0: DriverPlace<Ether<Opened>> = DriverPlace::new();
 static PHY0: DriverPlace<ether_phy::EtherPhy<Closed>> = DriverPlace::new();
 
 // todo: table 31.1 shows that hw supports multi-buffer frame transmission and reception.
@@ -39,32 +39,33 @@ static PHY0_CFG: ether_phy::EtherPhyConfig = ether_phy::EtherPhyConfig {
 
 // todo: move that stuff to hsram. They are already there, but it should be guaranteed.
 
-static RX_DESCRIPTORS: ConstStaticCell<[Descriptor<MTU>; ETH_N_RX_DESC]> =
+static RX_DESCRIPTORS: ConstStaticCell<[Descriptor; ETH_N_RX_DESC]> =
     ConstStaticCell::new([const { Descriptor::new() }; _]);
-static TX_DESCRIPTORS: ConstStaticCell<[Descriptor<MTU>; ETH_N_TX_DESC]> =
+static TX_DESCRIPTORS: ConstStaticCell<[Descriptor; ETH_N_TX_DESC]> =
     ConstStaticCell::new([const { Descriptor::new() }; _]);
-static BUFFERS_PLACE: StaticCell<Buffers<MTU, ETH_N_TX_DESC, ETH_N_TX_DESC>> = StaticCell::new();
-static TX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_TX_DESC]> =
+static BUFFERS_PLACE: StaticCell<Buffers<ETH_N_TX_DESC, ETH_N_TX_DESC>> = StaticCell::new();
+static TX_BUFFERS: ConstStaticCell<[Buffer<[u8; MTU]>; ETH_N_TX_DESC]> =
     ConstStaticCell::new([const { Buffer::new() }; _]);
-static RX_BUFFERS: ConstStaticCell<[Buffer<MTU>; ETH_N_RX_DESC]> =
+static RX_BUFFERS: ConstStaticCell<[Buffer<[u8; MTU]>; ETH_N_RX_DESC]> =
     ConstStaticCell::new([const { Buffer::new() }; _]);
 
 struct NetCallback;
 
-impl ra_fsp_rs::Callback<ether::InterruptCause, Ether<'static, MTU, Opened>> for NetCallback {
+impl ra_fsp_rs::Callback<ether::InterruptCause, Ether<'static, Opened>> for NetCallback {
     #[unsafe(link_section = ".code_in_ram")]
     fn call_with_block(
         _context: &Self,
-        block: core::pin::Pin<&mut Ether<'static, MTU, Opened>>,
+        block: core::pin::Pin<&mut Ether<'static, Opened>>,
         cause: ether::InterruptCause,
     ) {
         let receive = cause.receive;
         let transmits = cause.transmits;
         let went_up = cause.went_up;
 
-        if went_up {
-            block.update_rx_buffers(cause);
-        }
+        // Re-arms the RX ring only if FSP actually reset it on a link-up; the
+        // decision is derived from the driver's ring state, so this is safe to
+        // call unconditionally and `cause` is no longer trusted for it.
+        block.update_rx_buffers();
 
         if receive || transmits || went_up {
             POLL_NETWORK();
@@ -107,7 +108,7 @@ pub fn create_dev(
 
     let before = cortex_m::peripheral::NVIC::get_priority(Interrupt::IEL0);
 
-    let initializer = Ether::<MTU, Opened>::new_open(etherc, conf);
+    let initializer = Ether::<Opened>::new_open(etherc, conf);
 
     let mut eth = ETH0
         .write_pin_init(initializer)
