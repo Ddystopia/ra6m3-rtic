@@ -60,8 +60,8 @@ use log_ra6m3_setup as logger_setup;
 use net_ra6m3 as net_device;
 use network::Net;
 
-type Ticks = u32;
-use fugit::ExtU32 as TimeExt;
+type Ticks = u64;
+use fugit::ExtU64 as TimeExt;
 type Instant = fugit::Instant<Ticks, 1, CLOCK_HZ>;
 type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
