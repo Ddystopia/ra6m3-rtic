@@ -110,7 +110,8 @@ pub fn create_dev(
 
     let initializer = Ether::<Opened>::new_open(etherc, conf);
 
-    let mut eth = ETH0
+    // Rust-analyzer can't deduce the Ether<Opened> type.
+    let mut eth: ra_fsp_rs::DriverBox<Ether<Opened>> = ETH0
         .write_pin_init(initializer)
         .expect("Failed to open ethernet");
 
