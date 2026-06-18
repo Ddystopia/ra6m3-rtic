@@ -1,11 +1,10 @@
 use core::mem::MaybeUninit;
 
-use picoserve::{Config, response::File, routing::get_service};
+use picoserve::{Config, response::File, routing::get_service, time::Duration};
 use smoltcp::iface::SocketHandle;
 use timer::Timer;
 
 use crate::{
-    TimeExt,
     log::*,
     poll_share::{self, TokenProvider},
     socket::TcpSocket,
@@ -57,19 +56,23 @@ async fn handle_connection(
     buf: &mut [u8],
 ) {
     let config = Config::new(picoserve::Timeouts {
-        start_read_request: Some(5000.millis()),
-        read_request: Some(1000.millis()),
-        write: Some(5000.millis()),
+        start_read_request: Duration::from_millis(5000),
+        read_request: Duration::from_millis(1000),
+        write: Duration::from_millis(5000),
         // https://github.com/sammhicks/picoserve/issues/83
-        persistent_start_read_request: Some(100.millis()),
+        persistent_start_read_request: Duration::from_millis(100),
     });
 
-    match picoserve::serve_with_state(app, Timer, &config, buf, socket, &()).await {
-        Ok(count) => trace!("Handled {} requests", count),
+    match picoserve::Server::custom(app, Timer, &config, buf)
+        .serve(socket)
+        .await
+    {
+        Ok(info) => trace!("Handled {} requests", info.handled_requests_count),
+        Err(picoserve::Error::BadRequest) => error!("Failed to serve: Bad Request"),
         Err(picoserve::Error::Read(e)) => error!("Failed to serve with Read Error: {}", e),
         Err(picoserve::Error::Write(e)) => error!("Failed to serve with Write Error: {}", e),
-        Err(picoserve::Error::ReadTimeout) => error!("Failed to serve with Read Timeout"),
-        Err(picoserve::Error::WriteTimeout) => error!("Failed to serve with Write Timeout"),
+        Err(picoserve::Error::ReadTimeout(_)) => error!("Failed to serve with Read Timeout"),
+        Err(picoserve::Error::WriteTimeout(_)) => error!("Failed to serve with Write Timeout"),
     }
 }
 

@@ -44,8 +44,10 @@ mod network;
 mod poll_share;
 mod socket;
 mod socket_storage;
+mod time_driver;
 mod util;
 
+use ra_fsp_rs::gpt::IsrPrototype;
 use ra_fsp_rs::ioport::IoPort;
 
 use conf::CLOCK_HZ;
@@ -67,8 +69,15 @@ type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
 ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
+    // GPT channel 8 drives the embassy-time clock (see `time_driver`).
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT8_COUNTER_OVERFLOW => pac::Interrupt::IEL1,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT8_CAPTURE_COMPARE_A => pac::Interrupt::IEL2,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT8_CAPTURE_COMPARE_B => pac::Interrupt::IEL3,
 }
 
+// SysTick backs the `rtic-monotonics` `Mono` monotonic. `embassy-time` runs on
+// a separate GPT timer (see `time_driver`), so the macro's own `SysTick`
+// handler no longer clashes with anything.
 systick_monotonic!(Mono, CLOCK_HZ);
 
 const POLL_NETWORK: fn() = network::request_network_poll;
@@ -91,14 +100,11 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
         .expect("Failed to open ioports")
         .leak();
 
+    // SysTick backs the `rtic-monotonics` `Mono` monotonic.
     Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
-    unsafe {
-        ctx.core.NVIC.set_priority(
-            pac::Interrupt::IEL12,
-            ra_fsp_rs::utils::fsp_prio_to_hw(1, pac::NVIC_PRIO_BITS),
-        );
-    }
+    // GPT channel 8 backs the `embassy-time` driver.
+    time_driver::start(ctx.device.GPT328);
 
     let (net, device, sockets) = network::init_network(
         ctx.cs,
@@ -175,6 +181,26 @@ mod app {
         network::network_poller_task(ctx).await
     }
 
+    // GPT channel 8 events backing the `embassy-time` clock. RTIC owns these
+    // NVIC priorities; the GPT `open` reads them and leaves them untouched.
+    // `handle_isr` checks the active IRQ against the channel's configured IRQ
+    // (not the vector pointer), so it dispatches correctly under RTIC and needs
+    // no `unsafe`.
+    #[task(binds = IEL1, priority = 3)]
+    fn gpt_cycle_end(_: gpt_cycle_end::Context) {
+        time_driver::handle_isr(IsrPrototype::Overflow);
+    }
+
+    #[task(binds = IEL2, priority = 3)]
+    fn gpt_compare_a(_: gpt_compare_a::Context) {
+        time_driver::handle_isr(IsrPrototype::CompareA);
+    }
+
+    #[task(binds = IEL3, priority = 3)]
+    fn gpt_compare_b(_: gpt_compare_b::Context) {
+        time_driver::handle_isr(IsrPrototype::CompareB);
+    }
+
     // fixme: this code was in NetxDuo. But I personally don't like polling
     //        every 10ms. Maybe we can somehow trigger something etc.
     //        I don't even rememeber teh point of that whole thing.
@@ -188,6 +214,8 @@ mod app {
         }
     }
 
+    // // For this application blinly should be top priority
+    // #[task(priority = 5)]
     #[task(priority = 2)]
     async fn blinky(_ctx: blinky::Context, port1: pac::PORT1, port4: pac::PORT4) {
         const PERIOD_MS: Ticks = 100;

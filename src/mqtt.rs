@@ -1,76 +1,40 @@
-use core::task::{Poll, Waker};
-
 use crate::{
-    TimeExt,
     conf::{MQTT_BROKER_IP, MQTT_BROKER_PORT_TCP, MQTT_BROKER_PORT_TLS, MQTT_CLIENT_ID},
     log::*,
     poll_share::{self, TokenProvider},
-    socket::{self},
+    socket::{self, TcpSocket},
 };
-use adapter::{Broker, EmbeddedNalAdapter, MqttAlocation, NetError, TlsArgs};
-use minimq::{ConfigBuilder, Publication};
+use minimq::{ConfigBuilder, Publication, QoS, Session, TopicFilter};
 use rtic_monotonics::Monotonic;
 use smoltcp::iface::SocketHandle;
+
+use crate::{Mono, socket_storage::MQTT_BUFFER_SIZE};
+
+#[cfg(feature = "tls")]
+mod tls_socket;
+
+/// Local TCP source port; shifted on every reconnect attempt to dodge
+/// lingering TIME_WAIT state on the broker side.
+const MQTT_CLIENT_PORT: u16 = 58026;
+/// Backoff between connection attempts.
+const RECONNECT_INTERVAL_MS: u64 = 2_000;
+/// Keepalive interval advertised to the broker. minimq drives the PINGREQ
+/// cadence internally via embassy-time, so no external timeout loop is needed.
+const KEEPALIVE_SECS: u16 = 10 * 60;
+
+/// Size of the rx half carved out of the shared mqtt buffer.
+const MQTT_RX_SIZE: usize = MQTT_BUFFER_SIZE / 2;
 
 #[cfg(feature = "tls")]
 const TLS_TX_SIZE: usize = 16_640;
 #[cfg(feature = "tls")]
 const TLS_RX_SIZE: usize = 16_640;
 
-mod adapter;
-#[cfg(feature = "tls")]
-mod tls_socket;
-
-impl embedded_time::Clock for Mono {
-    type T = crate::Ticks;
-
-    const SCALING_FACTOR: embedded_time::rate::Fraction =
-        embedded_time::rate::Fraction::new(1, crate::conf::CLOCK_HZ);
-
-    fn try_now(&self) -> Result<embedded_time::Instant<Self>, embedded_time::clock::Error> {
-        Ok(embedded_time::Instant::new(Mono::now().ticks()))
-    }
-}
-
-use crate::{Mono, socket_storage::MQTT_BUFFER_SIZE};
-
-type Minimq = minimq::Minimq<'static, EmbeddedNalAdapter, Mono, Broker>;
-
 pub type NetLock = impl rtic::Mutex<T = crate::Net> + 'static;
-pub type MqttClient = minimq::mqtt_client::MqttClient<'static, EmbeddedNalAdapter, Mono, Broker>;
-pub type OnMessageRtic = impl OnMessage;
-
-pub trait OnMessage:
-    FnMut(
-    &mut MqttClient,
-    &str,
-    &[u8],
-    &minimq::types::Properties<'_>,
-) -> Result<(), minimq::Error<NetError>>
-{
-}
-
-pub struct Mqtt<F: OnMessage> {
-    minimq: Option<Minimq>,
-    rest: MqttRest<F>,
-}
-
-struct MqttRest<F: OnMessage> {
-    socket: SocketHandle,
-    on_message: F,
-    conf: Option<ConfigBuilder<'static, Broker>>,
-    net: TokenProvider<NetLock>,
-    waker: Waker,
-    alloc: Option<&'static mut MqttAlocation>,
-    #[cfg_attr(not(feature = "tls"), expect(dead_code))]
-    tls: Option<TlsArgs<'static>>,
-}
 
 pub struct Storage {
     pub buffer: [u8; MQTT_BUFFER_SIZE],
-    pub mqtt: Option<Mqtt<OnMessageRtic>>,
     pub token_place: poll_share::TokenProviderPlace<NetLock>,
-    pub alloc: MqttAlocation,
     #[cfg(feature = "tls")]
     pub tls_tx: [u8; TLS_TX_SIZE],
     #[cfg(feature = "tls")]
@@ -80,9 +44,7 @@ pub struct Storage {
 impl Storage {
     pub const fn new() -> Self {
         Self {
-            mqtt: None,
             buffer: [0; MQTT_BUFFER_SIZE],
-            alloc: MqttAlocation::new(),
             token_place: poll_share::TokenProviderPlace::new(),
             #[cfg(feature = "tls")]
             tls_tx: [0; TLS_TX_SIZE],
@@ -92,208 +54,199 @@ impl Storage {
     }
 }
 
-fn get_minimq<'a, F: OnMessage>(
-    place: &'a mut Option<Minimq>,
-    mqtt: &mut MqttRest<F>,
-) -> &'a mut Minimq {
-    place.get_or_insert_with(|| {
-        let alloc = mqtt.alloc.take().unwrap();
-        #[cfg(feature = "tls")]
-        let tls = mqtt.tls.take();
-        let adapter = EmbeddedNalAdapter::new(
-            mqtt.net,
-            mqtt.socket,
-            alloc,
-            mqtt.waker.clone(),
-            #[cfg(feature = "tls")]
-            tls,
+const SUB_TOPIC: &str = "/rtic_mqtt/hello_world";
+const RESPONSE_TOPIC: &str = "/rtic_mqtt/hello_world_response";
+
+/// Build a freshly connected transport for the broker.
+///
+/// Applies the reconnect backoff, shifts the local port, and (under the `tls`
+/// feature) performs the TLS handshake before handing back the IO object that
+/// `Session::connect` will take ownership of.
+#[cfg(not(feature = "tls"))]
+async fn connect_transport(
+    net: TokenProvider<NetLock>,
+    handle: SocketHandle,
+    port_shift: &mut core::num::Wrapping<u8>,
+    last_attempt: &mut Option<crate::Instant>,
+) -> Result<Transport<'static>, socket::ConnectError> {
+    connect_transport_inner(net, handle, port_shift, last_attempt).await
+}
+
+#[cfg(feature = "tls")]
+async fn connect_transport<'b>(
+    net: TokenProvider<NetLock>,
+    handle: SocketHandle,
+    port_shift: &mut core::num::Wrapping<u8>,
+    last_attempt: &mut Option<crate::Instant>,
+    tls_rx: &'b mut [u8],
+    tls_tx: &'b mut [u8],
+) -> Result<Transport<'b>, socket::ConnectError> {
+    connect_transport_inner(net, handle, port_shift, last_attempt, tls_rx, tls_tx).await
+}
+
+async fn connect_transport_inner<'b>(
+    net: TokenProvider<NetLock>,
+    handle: SocketHandle,
+    port_shift: &mut core::num::Wrapping<u8>,
+    last_attempt: &mut Option<crate::Instant>,
+    #[cfg(feature = "tls")] tls_rx: &'b mut [u8],
+    #[cfg(feature = "tls")] tls_tx: &'b mut [u8],
+) -> Result<Transport<'b>, socket::ConnectError> {
+    use crate::TimeExt;
+
+    // Backoff between connection attempts.
+    if let Some(last) = *last_attempt {
+        let deadline = last + RECONNECT_INTERVAL_MS.millis();
+        if Mono::now() < deadline {
+            Mono::delay_until(deadline).await;
+        }
+    }
+    *last_attempt = Some(Mono::now());
+
+    let broker_port = if cfg!(feature = "tls") {
+        MQTT_BROKER_PORT_TLS
+    } else {
+        MQTT_BROKER_PORT_TCP
+    };
+    let remote = core::net::SocketAddrV4::new(MQTT_BROKER_IP, broker_port);
+    let local_port = MQTT_CLIENT_PORT.wrapping_add(port_shift.0 as u16);
+    *port_shift += 1;
+
+    let mut tcp = TcpSocket::new(net, handle);
+    tcp.set_timeout(Some(smoltcp::time::Duration::from_secs(3600)));
+    tcp.set_keep_alive(Some(smoltcp::time::Duration::from_secs(1200)));
+
+    // If a previous session left the socket open, drop it before reconnecting.
+    if tcp.is_open() {
+        tcp.abort();
+    }
+
+    let remote = smoltcp::wire::IpEndpoint::from(core::net::SocketAddr::V4(remote));
+    tcp.connect(remote, local_port).await?;
+
+    #[cfg(not(feature = "tls"))]
+    {
+        Ok(tcp)
+    }
+    #[cfg(feature = "tls")]
+    {
+        use rand_chacha::rand_core::SeedableRng;
+
+        let mut rng = rand_chacha::ChaCha12Rng::from_seed([183; 32]);
+        let config = embedded_tls::TlsConfig::new().enable_rsa_signatures();
+        let ctx = embedded_tls::TlsContext::new(
+            &config,
+            embedded_tls::UnsecureProvider::new(&mut rng),
         );
-        Minimq::new(adapter, Mono, mqtt.conf.take().unwrap())
-    })
-}
-
-impl<F: OnMessage> Mqtt<F> {
-    pub fn new(
-        socket: SocketHandle,
-        conf: ConfigBuilder<'static, Broker>,
-        net: TokenProvider<NetLock>,
-        waker: Waker,
-        alloc: &'static mut MqttAlocation,
-        on_message: F,
-        tls: Option<TlsArgs<'static>>,
-    ) -> Self {
-        Self {
-            minimq: None,
-            rest: MqttRest {
-                socket,
-                conf: Some(conf),
-                net,
-                waker,
-                on_message,
-                alloc: Some(alloc),
-                tls,
-            },
-        }
-    }
-
-    pub fn poll(&mut self) -> Poll<Result<!, minimq::Error<NetError>>> {
-        let minimq = get_minimq(&mut self.minimq, &mut self.rest);
-        match minimq.poll(|a, b, c, d| (self.rest.on_message)(a, b, c, d)) {
-            Ok(Some(Ok(()))) | Ok(None) | Err(minimq::Error::NotReady) => Poll::Pending,
-            Ok(Some(Err(err))) | Err(err) => Poll::Ready(Err(err)),
-        }
-    }
-
-    pub async fn join(
-        &mut self,
-        keepalive_interval: crate::Duration,
-    ) -> Result<!, minimq::Error<NetError>> {
-        loop {
-            let poller = core::future::poll_fn(|_| self.poll());
-            match Mono::timeout_after(keepalive_interval / 3, poller).await {
-                Ok(Err(err)) => return Err(err),
-                Err(rtic_monotonics::TimeoutError) => continue,
+        let mut tls = tls_socket::TlsSocket::new(tcp, tls_rx, tls_tx);
+        match tls.open(ctx).await {
+            Ok(()) => Ok(tls),
+            Err(_err) => {
+                error!("TLS handshake failed");
+                Err(socket::ConnectError::ConnectionReset)
             }
         }
-    }
-
-    pub async fn subscribe(
-        &mut self,
-        topics: &[minimq::types::TopicFilter<'_>],
-        properties: &[minimq::Property<'_>],
-    ) -> Result<(), minimq::Error<NetError>> {
-        core::future::poll_fn(|_| {
-            if let Poll::Ready(err) = self.poll() {
-                let Err(err) = err;
-                return Poll::Ready(Err(err));
-            }
-            let minimq = get_minimq(&mut self.minimq, &mut self.rest);
-            match minimq.client().subscribe(topics, properties) {
-                Ok(_) => Poll::Ready(Ok(())),
-                Err(minimq::Error::NotReady) => self.poll().map(|r| r.map(|_| ())),
-                Err(other) => Poll::Ready(Err(other)),
-            }
-        })
-        .await?;
-
-        core::future::poll_fn(|_| {
-            if let Poll::Ready(err) = self.poll() {
-                let Err(err) = err;
-                return Poll::Ready(Err(err));
-            }
-            let minimq = get_minimq(&mut self.minimq, &mut self.rest);
-            if minimq.client().subscriptions_pending() {
-                Poll::Pending
-            } else {
-                Poll::Ready(Ok(()))
-            }
-        })
-        .await?;
-
-        Ok(())
     }
 }
 
-#[define_opaque(OnMessageRtic)]
-fn on_message() -> OnMessageRtic {
-    // note: annotations are for rust-analyzer, rustc does not require them
-    |client: &mut MqttClient,
-     topic: &str,
-     bytes: &[u8],
-     _props: &minimq::types::Properties<'_>|
-     -> Result<(), minimq::Error<NetError>> {
-        let msg = core::str::from_utf8(bytes).unwrap();
-        info!("Received message on topic '{}': {}", topic, msg);
-
-        let mut string = heapless::String::<512>::new();
-        _ = string.push_str("Echoing back: ");
-        _ = string.push_str(&msg[..msg.len().min(string.capacity() - string.len())]);
-
-        let publication = Publication::new("/rtic_mqtt/hello_world_response", string.as_str());
-        match client.publish(publication) {
-            Ok(()) => Ok(()),
-            Err(minimq::PubError::Error(mqtt_error)) => Err(mqtt_error),
-            Err(minimq::PubError::Serialization(_)) => todo!("Mqtt buffer is too small"),
-        }
-    }
-}
+/// The transport handed to `minimq::Session`. Plain TCP by default; a TLS
+/// stream (still implementing `embedded_io_async::Read + Write`) under `tls`.
+#[cfg(not(feature = "tls"))]
+type Transport<'a> = TcpSocket<NetLock>;
+#[cfg(feature = "tls")]
+type Transport<'a> = tls_socket::TlsSocket<'a, NetLock>;
 
 #[define_opaque(NetLock)]
 pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: SocketHandle) -> ! {
     let storage = ctx.local.storage;
     let net = TokenProvider::new(&mut storage.token_place, ctx.shared.net);
-    let port = if cfg!(feature = "tls") {
-        MQTT_BROKER_PORT_TLS
-    } else {
-        MQTT_BROKER_PORT_TCP
-    };
-    let conf = minimq::ConfigBuilder::new(
-        Broker(core::net::SocketAddr::from(core::net::SocketAddrV4::new(
-            MQTT_BROKER_IP,
-            port,
-        ))),
-        &mut storage.buffer[..],
-    );
-    let keepalive_interval = 10.minutes();
-    let waker = core::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
-    // Fixme: something bad happens with this keepalive, why it sends fucking SYN after 10 minutes?
-    //        then broker sends FIN to prev connection, us, we freak out and send RST
-    //        and "already connected" error appears. Idk why they can continue communicating as usual,
-    //        probably some state machine hack.
-    //        Like, in wireshark I see pings going on between them, yet minimq sends SYN after 10 mins.
-    let conf = conf.keepalive_interval(keepalive_interval.to_secs() as u16);
-    let conf = conf.client_id(MQTT_CLIENT_ID).expect("Invalid client id");
-    let callback = on_message();
 
-    #[cfg(feature = "tls")]
-    let tls = Some(TlsArgs {
-        tls_rx: &mut storage.tls_rx,
-        tls_tx: &mut storage.tls_tx,
-        config: embedded_tls::TlsConfig::new()
-            // .with_server_name("example.com") // It works without it for now, let it be like this
-            .enable_rsa_signatures(),
-    });
-    #[cfg(not(feature = "tls"))]
-    let tls = None;
+    let mut port_shift = core::num::Wrapping::<u8>(0);
+    let mut last_attempt: Option<crate::Instant> = None;
 
-    let mqtt = Mqtt::new(
-        socket_handle,
-        conf,
-        net,
-        waker,
-        &mut storage.alloc,
-        callback,
-        tls,
-    );
-    let mqtt = storage.mqtt.get_or_insert(mqtt);
+    // One `Session` for the whole lifetime — including under TLS. With this minimq
+    // fork the transport `IO` no longer lives in the `Session`; it lives in the
+    // `Connection` handle returned by `connect`. So each reconnect can hand in a
+    // fresh transport (a new TLS stream with its own record-buffer lifetime) while
+    // the single `Session` keeps subscriptions and in-flight QoS replay state.
+    let config = ConfigBuilder::from_buffer(&mut storage.buffer[..], MQTT_RX_SIZE)
+        .expect("mqtt buffer too small")
+        .client_id(MQTT_CLIENT_ID)
+        .expect("invalid client id")
+        .keepalive_interval(KEEPALIVE_SECS);
+    let mut session = Session::new(config);
 
     loop {
-        match try {
-            mqtt.subscribe(&["/rtic_mqtt/hello_world".into()], &[])
-                .await?;
-            info!("Subscribed to topics");
-            mqtt.join(keepalive_interval).await?
-        } {
-            Err(minimq::Error::Network(NetError::TcpConnectError(
-                socket::ConnectError::ConnectionReset,
-            ))) => {
-                info!("Failed to connect to broker, retrying...");
+        let result: Result<!, minimq::Error<_>> = try {
+            let io = match connect_transport(
+                net,
+                socket_handle,
+                &mut port_shift,
+                &mut last_attempt,
+                #[cfg(feature = "tls")]
+                &mut storage.tls_rx,
+                #[cfg(feature = "tls")]
+                &mut storage.tls_tx,
+            )
+            .await
+            {
+                Ok(io) => io,
+                Err(err) => {
+                    info!("Failed to connect transport to broker: {}, retrying...", err);
+                    continue;
+                }
+            };
+
+            // Hand the connected transport to the session; the returned handle owns
+            // the transport and borrows the session. Dropping it at the end of this
+            // iteration releases the transport (and its TLS buffer borrows) for the
+            // next reconnect. State carried across reconnects is reset inside
+            // `connect`, so it does not matter how the previous handle ended.
+            let mut conn = session.connect(io).await?;
+            info!("Connected to MQTT broker");
+
+            let sub = conn.subscribe(&[TopicFilter::new(SUB_TOPIC)], &[]).await?;
+            while conn.is_pending(&sub) {
+                conn.poll().await?;
             }
-            Err(minimq::Error::Network(other)) => error!("Minimq Network error: {}", other),
-            Err(minimq::Error::SessionReset) => warn!("Mqtt Session Reset"),
-            Err(minimq::Error::NotReady) => unreachable!(),
-            // `minimq::Error` is non-exhaustive + other variants are dead code in 0.10.0
-            Err(_other) => error!("Unknown mqtt error"),
+            info!("Subscribed to topics");
+
+            loop {
+                let msg = conn.recv().await?;
+                let topic = msg.topic();
+                let payload = msg.payload();
+
+                let Ok(text) = core::str::from_utf8(payload) else {
+                    warn!("Received non-utf8 message on topic '{}'", topic);
+                    continue;
+                };
+                info!("Received message on topic '{}': {}", topic, text);
+
+                let mut string = heapless::String::<512>::new();
+                _ = string.push_str("Echoing back: ");
+                let take = text.len().min(string.capacity() - string.len());
+                _ = string.push_str(&text[..take]);
+
+                let publication =
+                    Publication::new(RESPONSE_TOPIC, string.as_str()).qos(QoS::AtLeastOnce);
+                match conn.publish(publication).await {
+                    Ok(_) => {}
+                    Err(minimq::PubError::Session(err)) => Err(err)?,
+                    Err(minimq::PubError::Payload(_)) => {
+                        warn!("Mqtt buffer too small for response");
+                    }
+                }
+            }
+        };
+
+        match result {
+            Err(minimq::Error::Disconnected) => {
+                info!("MQTT session disconnected, reconnecting...");
+            }
+            Err(minimq::Error::Transport(err)) => {
+                error!("MQTT transport error: {}, reconnecting...", err);
+            }
+            Err(other) => error!("MQTT error: {}", other),
         }
     }
-}
-
-impl<F> OnMessage for F where
-    F: FnMut(
-        &mut MqttClient,
-        &str,
-        &[u8],
-        &minimq::types::Properties<'_>,
-    ) -> Result<(), minimq::Error<NetError>>
-{
 }

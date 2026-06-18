@@ -5,3 +5,4 @@ type-sizes.txt
 *.pdf
 ozone.jdebug.user
 env.toml
+.gdb_history

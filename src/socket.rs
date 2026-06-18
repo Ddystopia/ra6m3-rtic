@@ -710,6 +710,11 @@ impl<M: NetMutex> From<TcpSocket<M>> for SocketInner<M> {
 mod embedded_io_impls {
     use super::*;
 
+    // embedded-io-async 0.7 requires `Error: core::error::Error` (which in turn
+    // needs `Display`, satisfied by the `strum::Display` derives above).
+    impl core::error::Error for Error {}
+    impl core::error::Error for ConnectError {}
+
     impl embedded_io_async::Error for ConnectError {
         fn kind(&self) -> embedded_io_async::ErrorKind {
             match self {
@@ -746,6 +751,10 @@ mod embedded_io_impls {
     impl<M: NetMutex> embedded_io_async::Write for SocketInner<M> {
         async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
             self.write(buf).await
+        }
+
+        async fn flush(&mut self) -> Result<(), Self::Error> {
+            self.flush().await
         }
     }
 
@@ -814,38 +823,54 @@ mod embedded_io_impls {
     }
 }
 
+/// Marker [`picoserve`] runtime for this project (rtic + embassy-time).
+///
+/// picoserve 0.18 parameterises [`picoserve::Timer`] and [`picoserve::io::Socket`]
+/// over a `Runtime` marker so the two impls agree; ours lives here so both the
+/// `Socket` impl below and the `Timer` impl in `http/timer.rs` can name it.
+pub struct PicoRuntime;
+
 mod picoserve_impl {
     use super::*;
 
-    use picoserve::{io::ReadExt, time::Timer};
+    use picoserve::io::ReadExt;
 
-    async fn run_with_maybe_timeout<T: Timer, F: core::future::Future>(
-        this: &mut T,
-        duration: Option<T::Duration>,
-        future: F,
-    ) -> Result<F::Output, T::TimeoutError> {
-        if let Some(duration) = duration {
-            this.run_with_timeout(duration, future).await
-        } else {
-            Ok(future.await)
-        }
-    }
-
-    impl<M: NetMutex> picoserve::io::Socket for TcpSocket<M> {
+    impl<M: NetMutex> picoserve::io::Socket<PicoRuntime> for TcpSocket<M> {
         type Error = Error;
 
-        type ReadHalf<'a> = TcpReader<'a, M>;
+        type ReadHalf<'a>
+            = TcpReader<'a, M>
+        where
+            Self: 'a;
 
-        type WriteHalf<'a> = TcpWriter<'a, M>;
+        type WriteHalf<'a>
+            = TcpWriter<'a, M>
+        where
+            Self: 'a;
 
         fn split(&mut self) -> (Self::ReadHalf<'_>, Self::WriteHalf<'_>) {
             self.split()
         }
 
-        async fn shutdown<Timer: picoserve::Timer>(
+        async fn abort<T: picoserve::Timer<PicoRuntime>>(
             mut self,
-            timeouts: &picoserve::Timeouts<Timer::Duration>,
-            timer: &mut Timer,
+            timeouts: &picoserve::Timeouts,
+            timer: &mut T,
+        ) -> Result<(), picoserve::Error<Self::Error>> {
+            Self::abort(&mut self);
+
+            // Send the RST.
+            timer
+                .run_with_timeout(timeouts.write, self.flush())
+                .await
+                .map_err(picoserve::Error::WriteTimeout)?
+                .map_err(picoserve::Error::Write)
+        }
+
+        async fn shutdown<T: picoserve::Timer<PicoRuntime>>(
+            mut self,
+            timeouts: &picoserve::Timeouts,
+            timer: &mut T,
         ) -> Result<(), picoserve::Error<Self::Error>> {
             self.close();
 
@@ -854,26 +879,24 @@ mod picoserve_impl {
             // Flush the write half until the read half has been closed by the client
             futures_lite::future::or(
                 core::pin::pin!(async {
-                    run_with_maybe_timeout(
-                        timer,
-                        timeouts.read_request.clone(),
-                        rx.discard_all_data(),
-                    )
-                    .await
-                    .map_err(|_err| picoserve::Error::ReadTimeout)?
-                    .map_err(picoserve::Error::Read)
+                    timer
+                        .run_with_timeout(timeouts.read_request, rx.discard_all_data())
+                        .await
+                        .map_err(picoserve::Error::ReadTimeout)?
+                        .map_err(picoserve::Error::Read)
                 }),
                 core::pin::pin!(async {
                     tx.flush().await.map_err(picoserve::Error::Write)?;
                     core::future::pending().await
                 }),
-            ).await?;
+            )
+            .await?;
 
             // Flush the write half until the socket is closed.
-
-            run_with_maybe_timeout(timer, timeouts.write.clone(), self.flush())
+            timer
+                .run_with_timeout(timeouts.write, self.flush())
                 .await
-                .map_err(|_err| picoserve::Error::WriteTimeout)?
+                .map_err(picoserve::Error::WriteTimeout)?
                 .map_err(picoserve::Error::Write)
         }
     }
