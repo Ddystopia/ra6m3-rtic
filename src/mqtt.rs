@@ -134,10 +134,8 @@ async fn connect_transport_inner<'b>(
 
         let mut rng = rand_chacha::ChaCha12Rng::from_seed([183; 32]);
         let config = embedded_tls::TlsConfig::new().enable_rsa_signatures();
-        let ctx = embedded_tls::TlsContext::new(
-            &config,
-            embedded_tls::UnsecureProvider::new(&mut rng),
-        );
+        let ctx =
+            embedded_tls::TlsContext::new(&config, embedded_tls::UnsecureProvider::new(&mut rng));
         let mut tls = tls_socket::TlsSocket::new(tcp, tls_rx, tls_tx);
         match tls.open(ctx).await {
             Ok(()) => Ok(tls),
@@ -177,7 +175,9 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
     let mut session = Session::new(config);
 
     loop {
-        let result: Result<!, minimq::Error<_>> = try {
+        let mut conn = None;
+
+        let Err(err): Result<!, minimq::Error<_>> = try {
             let io = match connect_transport(
                 net,
                 socket_handle,
@@ -192,7 +192,10 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
             {
                 Ok(io) => io,
                 Err(err) => {
-                    info!("Failed to connect transport to broker: {}, retrying...", err);
+                    info!(
+                        "Failed to connect transport to broker: {}, retrying...",
+                        err
+                    );
                     continue;
                 }
             };
@@ -202,7 +205,10 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
             // iteration releases the transport (and its TLS buffer borrows) for the
             // next reconnect. State carried across reconnects is reset inside
             // `connect`, so it does not matter how the previous handle ended.
-            let mut conn = session.connect(io).await?;
+            let conn = {
+                conn = Some(session.connect(io).await?);
+                conn.as_mut().expect("Must be some")
+            };
             info!("Connected to MQTT broker");
 
             let sub = conn.subscribe(&[TopicFilter::new(SUB_TOPIC)], &[]).await?;
@@ -218,7 +224,7 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
 
                 let Ok(text) = core::str::from_utf8(payload) else {
                     warn!("Received non-utf8 message on topic '{}'", topic);
-                    continue;
+                    Err::<!, _>(minimq::Error::Disconnected)?;
                 };
                 info!("Received message on topic '{}': {}", topic, text);
 
@@ -239,14 +245,16 @@ pub async fn mqtt(ctx: crate::app::mqtt_task::Context<'static>, socket_handle: S
             }
         };
 
-        match result {
-            Err(minimq::Error::Disconnected) => {
-                info!("MQTT session disconnected, reconnecting...");
+        if let Some(conn) = conn.take() {
+            conn.into_inner().disconnect().await;
+        }
+
+        match err {
+            minimq::Error::Disconnected => info!("MQTT session disconnected, reconnecting..."),
+            minimq::Error::Transport(err) => {
+                error!("MQTT transport error: {err}, reconnecting...")
             }
-            Err(minimq::Error::Transport(err)) => {
-                error!("MQTT transport error: {}, reconnecting...", err);
-            }
-            Err(other) => error!("MQTT error: {}", other),
+            err => error!("MQTT error: {err}"),
         }
     }
 }
