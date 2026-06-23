@@ -82,6 +82,7 @@ features = [
     "medium-ethernet",
     "proto-ipv4",
     "proto-ipv6",
+    "auto-icmp-echo-reply",
     "socket-udp",
     "socket-tcp",
     # "verbose",
