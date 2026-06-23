@@ -197,9 +197,9 @@ mod app {
     }
 
     // fixme: this code was in NetxDuo. But I personally don't like polling
-    //        every 10ms. Maybe we can somehow trigger something etc.
+    //        every 100ms. Maybe we can somehow trigger something etc.
     //        I don't even rememeber teh point of that whole thing.
-    #[task(priority = 4, shared = [device])]
+    #[task(priority = 1, shared = [device])]
     async fn network_link_poll(mut ctx: network_link_poll::Context) {
         let mut next = Mono::now();
         loop {
