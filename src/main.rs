@@ -6,9 +6,6 @@
 
 /*
 
-IMPORTANT: Run with debugger attached. If not, set logger channel to `NoBlockTrim`
-instead of `BlockIfFull`, or it won't work.
-
 todo:
   R_BSP_GroupIrqWrite(BSP_GRP_IRQ_MPU_STACK, handle_stack_overflow);
 
@@ -81,8 +78,6 @@ ra_fsp_rs::event_link_select! {
 systick_monotonic!(Mono, CLOCK_HZ);
 
 const POLL_NETWORK: fn() = network::request_network_poll;
-
-// todo: make smoltcp happy with 32 bit systick
 
 fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     logger_setup::init();
