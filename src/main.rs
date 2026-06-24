@@ -35,13 +35,13 @@ mod log {
 }
 
 mod conf;
+mod embassy_time_driver;
 mod http;
 mod mqtt;
 mod network;
 mod poll_share;
 mod socket;
 mod socket_storage;
-mod time_driver;
 mod util;
 
 use ra_fsp_rs::gpt::IsrPrototype;
@@ -99,7 +99,7 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
     Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
 
     // GPT channel 8 backs the `embassy-time` driver.
-    time_driver::start(ctx.device.GPT328);
+    embassy_time_driver::start(ctx.device.GPT328);
 
     let (net, device, sockets) = network::init_network(
         ctx.cs,
@@ -176,26 +176,6 @@ mod app {
         network::network_poller_task(ctx).await
     }
 
-    // GPT channel 8 events backing the `embassy-time` clock. RTIC owns these
-    // NVIC priorities; the GPT `open` reads them and leaves them untouched.
-    // `handle_isr` checks the active IRQ against the channel's configured IRQ
-    // (not the vector pointer), so it dispatches correctly under RTIC and needs
-    // no `unsafe`.
-    #[task(binds = IEL1, priority = 3)]
-    fn gpt_cycle_end(_: gpt_cycle_end::Context) {
-        time_driver::handle_isr(IsrPrototype::Overflow);
-    }
-
-    #[task(binds = IEL2, priority = 3)]
-    fn gpt_compare_a(_: gpt_compare_a::Context) {
-        time_driver::handle_isr(IsrPrototype::CompareA);
-    }
-
-    #[task(binds = IEL3, priority = 3)]
-    fn gpt_compare_b(_: gpt_compare_b::Context) {
-        time_driver::handle_isr(IsrPrototype::CompareB);
-    }
-
     // fixme: this code was in NetxDuo. But I personally don't like polling
     //        every 100ms. Maybe we can somehow trigger something etc.
     //        I don't even rememeber teh point of that whole thing.
@@ -240,5 +220,20 @@ mod app {
         loop {
             rtic::export::wfi();
         }
+    }
+
+    #[task(binds = IEL1, priority = 5)]
+    fn gpt8_cycle_end(_: gpt8_cycle_end::Context) {
+        embassy_time_driver::handle_isr(IsrPrototype::Overflow);
+    }
+
+    #[task(binds = IEL2, priority = 5)]
+    fn gpt8_compare_a(_: gpt8_compare_a::Context) {
+        embassy_time_driver::handle_isr(IsrPrototype::CompareA);
+    }
+
+    #[task(binds = IEL3, priority = 5)]
+    fn gpt8_compare_b(_: gpt8_compare_b::Context) {
+        embassy_time_driver::handle_isr(IsrPrototype::CompareB);
     }
 }
