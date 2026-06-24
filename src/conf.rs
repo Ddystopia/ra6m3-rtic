@@ -22,9 +22,9 @@ macro_rules! parse_ipv6 {
     }};
 }
 
-// Must device systick frequency evenly, which is 120MHz.
-// If too much, systick's isr would overthrow the application
-pub const CLOCK_HZ: u32 = 12_000; // 83.33(3)us
+// Tick rate of the `Mono` monotonic, backed by a GPT timer channel (see
+// `crate::mono`). It must equal the GPT count rate: PCLKD (120 MHz) / 4 = 30 MHz.
+pub const CLOCK_HZ: u32 = 30_000_000; // 33.33(3)ns
 pub const MAC: [u8; 6] = iter::collect_const!(u8 =>
     string::split(env!("MAC"), ":"),
         map(|s| parse_u8(s, 16, "Invalid MAC address")),

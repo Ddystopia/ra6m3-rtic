@@ -8,7 +8,7 @@ edition = "2024"
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-semihosting = "0.5.0"
 rtic = { git = "https://github.com/rtic-rs/rtic", features = ["cortex-m", "thumbv7-backend"] }
-rtic-monotonics = { version = "2.1.0", features = ["cortex-m-systick", "systick-64bit"] }
+rtic-monotonics = { version = "2.1.0" }
 defmt = { version = "0.3.8", features = ["encoding-rzcobs"], optional = true }
 log = { version = "0.4.27", features = ["release_max_level_info"], default-features = false, optional = true }
 konst = "0.3.16"
@@ -29,8 +29,6 @@ strum = { version = "0.27.1", features = ["derive"], default-features = false }
 rtt-target = { git = "https://github.com/probe-rs/rtt-target.git", features = ["log"], optional = true }
 sha2 = { version = "0.10.8", default-features = false }
 rand_core = "0.6.4"
-# Setting a feature to prevent a deadlock in `AtomicU64`, used by rtic-monotonics/systick-64bit
-portable-atomic = { version = "1.13.0", default-features = false, features = ["unsafe-assume-single-core"] }
 # embassy-time: time source is a GPT timer channel (see `src/time_driver.rs` and
 # the `embassy-time-gpt` feature on ra-fsp-rs). TICK_HZ must equal the GPT count
 # rate: PCLKD (120 MHz) / 4 = 30 MHz.
@@ -41,7 +39,7 @@ critical-section = "1.2.0"
 
 [dependencies.ra-fsp-rs]
 version = "0.2.0"
-features = ["device", "log", "ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "smoltcp-ether", "embassy-time-gpt"]
+features = ["device", "log", "ra6m3", "mod-r_ioport", "mod-r_ether", "mod-r_ether_phy", "smoltcp-ether", "embassy-time-gpt", "rtic-monotonics-gpt"]
 optional = true 
 default-features = false
 

@@ -1245,7 +1245,6 @@ dependencies = [
  "log",
  "minimq",
  "picoserve",
- "portable-atomic",
  "ra-fsp-rs",
  "rand_chacha",
  "rand_core",
@@ -1284,6 +1283,7 @@ dependencies = [
  "pinned-init",
  "ra-fsp-sys",
  "ra6m3-fsp-pac",
+ "rtic-monotonics",
  "smoltcp",
  "static_cell",
 ]
@@ -1418,7 +1418,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99f9923ce32637ee40c0cb28fbbc2fad880d8aebea2d545918c6971ae9be3d17"
 dependencies = [
  "cfg-if",
- "cortex-m",
  "fugit",
  "portable-atomic",
  "rtic-time",

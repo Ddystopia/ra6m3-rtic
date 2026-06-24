@@ -37,6 +37,7 @@ mod log {
 mod conf;
 mod embassy_time_driver;
 mod http;
+mod mono;
 mod mqtt;
 mod network;
 mod poll_share;
@@ -48,9 +49,10 @@ use ra_fsp_rs::gpt::IsrPrototype;
 use ra_fsp_rs::ioport::IoPort;
 
 use conf::CLOCK_HZ;
+use mono::Mono;
 #[allow(unused_imports)]
 use rtic::mutex_prelude::*;
-use rtic_monotonics::systick::prelude::*;
+use rtic_monotonics::{Monotonic, fugit};
 use smoltcp::iface::SocketHandle;
 
 use socket_storage::SocketStorage;
@@ -66,16 +68,17 @@ type Duration = fugit::Duration<Ticks, 1, CLOCK_HZ>;
 
 ra_fsp_rs::event_link_select! {
     ra_fsp_rs::e_elc_event::ELC_EVENT_EDMAC0_EINT => pac::Interrupt::IEL0,
+
     // GPT channel 8 drives the embassy-time clock (see `time_driver`).
     ra_fsp_rs::e_elc_event::ELC_EVENT_GPT8_COUNTER_OVERFLOW => pac::Interrupt::IEL1,
     ra_fsp_rs::e_elc_event::ELC_EVENT_GPT8_CAPTURE_COMPARE_A => pac::Interrupt::IEL2,
     ra_fsp_rs::e_elc_event::ELC_EVENT_GPT8_CAPTURE_COMPARE_B => pac::Interrupt::IEL3,
-}
 
-// SysTick backs the `rtic-monotonics` `Mono` monotonic. `embassy-time` runs on
-// a separate GPT timer (see `time_driver`), so the macro's own `SysTick`
-// handler no longer clashes with anything.
-systick_monotonic!(Mono, CLOCK_HZ);
+    // GPT channel 9 drives the rtic-monotonics `Mono` (see `mono`).
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT9_COUNTER_OVERFLOW => pac::Interrupt::IEL4,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT9_CAPTURE_COMPARE_A => pac::Interrupt::IEL5,
+    ra_fsp_rs::e_elc_event::ELC_EVENT_GPT9_CAPTURE_COMPARE_B => pac::Interrupt::IEL6,
+}
 
 const POLL_NETWORK: fn() = network::request_network_poll;
 
@@ -95,8 +98,8 @@ fn init(mut ctx: app::init::Context) -> (app::Shared, app::Local) {
         .expect("Failed to open ioports")
         .leak();
 
-    // SysTick backs the `rtic-monotonics` `Mono` monotonic.
-    Mono::start(ctx.core.SYST, ra_fsp_rs::systick::system_core_clock(ctx.cs));
+    // GPT channel 9 backs the `rtic-monotonics` `Mono` monotonic.
+    mono::start(ctx.device.GPT329);
 
     // GPT channel 8 backs the `embassy-time` driver.
     embassy_time_driver::start(ctx.device.GPT328);
@@ -235,5 +238,20 @@ mod app {
     #[task(binds = IEL3, priority = 5)]
     fn gpt8_compare_b(_: gpt8_compare_b::Context) {
         embassy_time_driver::handle_isr(IsrPrototype::CompareB);
+    }
+
+    #[task(binds = IEL4, priority = 5)]
+    fn gpt9_cycle_end(_: gpt9_cycle_end::Context) {
+        mono::handle_isr(IsrPrototype::Overflow);
+    }
+
+    #[task(binds = IEL5, priority = 5)]
+    fn gpt9_compare_a(_: gpt9_compare_a::Context) {
+        mono::handle_isr(IsrPrototype::CompareA);
+    }
+
+    #[task(binds = IEL6, priority = 5)]
+    fn gpt9_compare_b(_: gpt9_compare_b::Context) {
+        mono::handle_isr(IsrPrototype::CompareB);
     }
 }
