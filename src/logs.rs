@@ -1,3 +1,7 @@
+// Prepend an uptime timestamp to every defmt record, including third-party
+// logs. Applies globally; defined once per program.
+defmt::timestamp!("{=u64:us}", crate::mono::uptime_us());
+
 #[macro_export]
 macro_rules! trace {
     ($($arg:tt)*) => { defmt::trace!($($arg)*) };

@@ -10,7 +10,38 @@ pub fn init() {
         section_cb: ".segger_rtt"
     };
     rtt_target::set_print_channel(channels.up.0);
-    rtt_target::init_logger_with_level(log::LevelFilter::Trace);
+
+    static LOGGER: RttLogger = RttLogger;
+    // `set_logger` only fails if a logger was already installed; `init` runs once.
+    let _ = log::set_logger(&LOGGER);
+    log::set_max_level(log::LevelFilter::Trace);
+}
+
+/// `log::Log` backend that prepends an uptime timestamp to every record, so
+/// both this crate's logs and third-party logs (smoltcp, ra-fsp-rs, picoserve)
+/// share one timestamped format over RTT.
+struct RttLogger;
+
+impl log::Log for RttLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        let us = crate::mono::uptime_us();
+        let secs = us / 1_000_000;
+        let millis = us % 1_000_000 / 1_000;
+        rtt_target::rprintln!(
+            "[{:>5}.{:03}] {:<5} [{}] {}",
+            secs,
+            millis,
+            record.level(),
+            record.target(),
+            record.args()
+        );
+    }
+
+    fn flush(&self) {}
 }
 
 #[panic_handler]

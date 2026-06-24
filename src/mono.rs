@@ -29,16 +29,34 @@
 //! priority RTIC has already programmed and feeds it back to FSP so FSP leaves
 //! it untouched.
 
+use core::sync::atomic::{AtomicBool, Ordering};
+
 use ra_fsp_rs::DriverPlace;
 use ra_fsp_rs::gpt::{Channel, Gpt, GptExtendedConfig, IsrPrototype};
 use ra_fsp_rs::pac::{GPT329, Interrupt};
 use ra_fsp_rs::state_markers::Opened;
 use ra_fsp_rs::sys::generated::{e_timer_mode, e_timer_source_div, gpt_source_t};
 use ra_fsp_rs::timer_api::TimerConf;
+use rtic_monotonics::Monotonic;
 
 use crate::conf::CLOCK_HZ;
 
 ra_fsp_rs::gpt_monotonic!(Mono<GPT329>, CLOCK_HZ);
+
+/// Set once [`start`] has run. `Mono::now()` panics until the GPT driver is
+/// initialized, so [`uptime_us`] checks this before reading the clock.
+static STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Microseconds elapsed since [`start`] was called.
+///
+/// Returns 0 before the monotonic is up, so it is safe to call from the logger
+/// during early `init` (the first few log lines will read 0).
+pub fn uptime_us() -> u64 {
+    if !STARTED.load(Ordering::Relaxed) {
+        return 0;
+    }
+    Mono::now().duration_since_epoch().to_micros()
+}
 
 /// IEL slots the GPT9 events are linked to. These must match the
 /// `event_link_select!` mapping and the `#[task(binds = ..)]` handlers in
@@ -77,6 +95,8 @@ pub fn start(gpt_reg: GPT329) {
         .expect("Failed to open GPT timer for the rtic monotonic");
 
     Mono::start(gpt).expect("Failed to start the rtic GPT monotonic");
+
+    STARTED.store(true, Ordering::Relaxed);
 }
 
 /// Dispatch a GPT9 ISR event from its bound RTIC task. `handle_isr` no-ops
