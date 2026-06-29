@@ -1,4 +1,8 @@
-include = ["../env.toml"]
+# Toolchain selection: switch this between ../env.llvm.toml (clang/lld + LTO) and
+# ../env.gcc.toml (arm-none-eabi-gcc). Each env file is self-contained: it carries
+# the [env] toolchain vars AND the [target] linker rustflags.
+include = ["../env.llvm.toml"]
+# include = ["../env.gcc.toml"]
 
 [build]
 target = "thumbv7em-none-eabihf"
@@ -9,35 +13,4 @@ target = "thumbv7em-none-eabihf"
 
 [target.thumbv7em-none-eabihf]
 runner = "probe-rs run --chip R7FA6M3AH"
-rustflags = [
-  "-C", "target-cpu=cortex-m4",
-
-  # Use the same linker as CC
-  "-C", "linker=/opt/arm-none-eabi-gcc-11.2.0/bin/arm-bare_newlib_cortex_m4f_nommu-eabihf-gcc",
-
-  # Linker script
-  "-C", "link-arg=-Tra-fsp-sys.x",
-
-  # Linker flags
-
-  # in cmake there is no -nodefaultlibs
-  "-C", "default-linker-libraries=yes",
-
-  # "-C", "link-arg=--fail-me",
-  "-C", "link-arg=--sysroot=/opt/arm-none-eabi-gcc-11.2.0/arm-bare_newlib_cortex_m4f_nommu-eabihf",
-  "-C", "link-arg=-Wall",
-  "-C", "link-arg=-mlittle-endian",
-  "-C", "link-arg=-mthumb",
-  "-C", "link-arg=-mcpu=cortex-m4",
-  "-C", "link-arg=-mfloat-abi=hard",
-  "-C", "link-arg=-mfpu=fpv4-sp-d16",
-  "-C", "link-arg=-mno-unaligned-access",
-  "-C", "link-arg=--std=gnu11",
-  "-C", "link-arg=-ffunction-sections",
-  "-C", "link-arg=-fdata-sections",
-  "-C", "link-arg=-Woverride-init",
-  "-C", "link-arg=-fno-short-enums",
-  "-C", "link-arg=-gdwarf-4",
-  "-C", "link-arg=-Wl,--build-id=none", # important!! .text is misplaced by 24 bytes if not set
-  "-C", "link-arg=-Wl,-no-enum-size-warning",
-]
+# rustflags come from the included env file (gcc vs llvm differ in linker).

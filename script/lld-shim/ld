@@ -1,0 +1,5 @@
+#!/bin/sh
+# Shim so the arm-none-eabi-gcc link driver uses ld.lld (LLVM, matches rustc)
+# instead of its bundled bfd ld. lld natively understands LLVM bitcode, which is
+# what enables cross-language (Rust + FSP C) LTO. Selected via `-Bscript/lld-shim`.
+exec ld.lld "$@"
